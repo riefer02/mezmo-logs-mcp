@@ -15,24 +15,47 @@ if not MEZMO_API_KEY:
 
 async def fetch_latest_logs(
     count: int = 50,
-    app_name: Optional[str] = None,
+    apps: Optional[str] = None,
+    hosts: Optional[str] = None,
+    levels: Optional[str] = None,
     query: Optional[str] = None,
+    from_ts: Optional[str] = None,
+    to_ts: Optional[str] = None,
+    prefer: Optional[str] = "tail",
+    pagination_id: Optional[str] = None,
 ) -> List[dict]:
     """
-    Fetch the latest logs from Mezmo Export API v2.
-    Returns a list of log lines (as dicts).
+    Fetch logs from Mezmo Export API v2.
+    Parameters:
+        count (int): Number of logs to return (max 10,000)
+        apps (str, optional): Comma-separated list of applications
+        hosts (str, optional): Comma-separated list of hosts
+        levels (str, optional): Comma-separated list of log levels
+        query (str, optional): Search query
+        from_ts (str, optional): Start time (UNIX timestamp)
+        to_ts (str, optional): End time (UNIX timestamp)
+        prefer (str, optional): 'head' or 'tail' (default: 'tail')
+        pagination_id (str, optional): Token for paginated results
+    Returns:
+        List of log lines (as dicts)
     """
     url = f"{MEZMO_API_BASE_URL}/v2/export"
     params = {
-        "from": 0,  # retention boundary
-        "to": 0,  # now
+        "from": from_ts if from_ts is not None else 0,  # retention boundary
+        "to": to_ts if to_ts is not None else 0,  # now
         "size": count,
-        "prefer": "tail",
+        "prefer": prefer,
     }
-    if app_name:
-        params["apps"] = app_name
+    if apps:
+        params["apps"] = apps
+    if hosts:
+        params["hosts"] = hosts
+    if levels:
+        params["levels"] = levels
     if query:
         params["query"] = query
+    if pagination_id:
+        params["pagination_id"] = pagination_id
 
     headers = {"servicekey": MEZMO_API_KEY}
 
