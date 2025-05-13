@@ -85,7 +85,7 @@ mcp dev server.py
 ```json
 {
   "count": 10,
-  "apps": "twin-platform",
+  "apps": "example-app",
   "levels": "ERROR"
 }
 ```
@@ -98,23 +98,23 @@ If your logs include an `environment` field (e.g., `"environment": "production"`
 
 Below are some practical examples:
 
-**Find error logs from the `twin-platform` app in the staging environment:**
+**Find error logs from the `example-app` app in the staging environment:**
 
 ```json
 {
   "count": 5,
-  "apps": "twin-platform",
+  "apps": "example-app",
   "levels": "ERROR",
   "query": "staging"
 }
 ```
 
-**Find error logs from the `twin-platform` app in the production environment:**
+**Find error logs from the `example-app` app in the production environment:**
 
 ```json
 {
   "count": 5,
-  "apps": "twin-platform",
+  "apps": "example-app",
   "levels": "ERROR",
   "query": "production"
 }
@@ -125,12 +125,12 @@ Below are some practical examples:
 ```json
 {
   "count": 5,
-  "apps": "twin-platform",
+  "apps": "example-app",
   "query": "bedrock"
 }
 ```
 
-This will return the 5 most recent logs from the `twin-platform` app that contain the word "bedrock" anywhere in the log line.
+This will return the 5 most recent logs from the `example-app` app that contain the word "bedrock" anywhere in the log line.
 
 ## Tool: get_logs
 
