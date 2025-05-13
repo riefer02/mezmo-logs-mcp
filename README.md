@@ -40,36 +40,54 @@ MEZMO_API_KEY=your_service_key_here
 # MEZMO_API_BASE_URL=https://api.mezmo.com
 ```
 
-### 4. Running the Server
+### 4. MCP Server Configuration
+
+Create a `.mcp.json` file in your project root (example below):
+
+```json
+{
+  "mcpServers": {
+    "mezmo": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/mezmo-mcp", "run", "server.py"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+Replace `/path/to/mezmo-mcp` with your actual project directory.
+
+### 5. Running the Server
 
 ```bash
 mcp dev server.py
 ```
 
-### 5. Testing
+### 6. Testing
 
 - Use the MCP Inspector or Claude Desktop to call the `get_logs` tool.
 - Example tool call parameters:
   - `count`: Number of logs to retrieve (default: 50)
   - `apps`: (Optional) Comma-separated list of applications
   - `hosts`: (Optional) Comma-separated list of hosts
-  - `levels`: (Optional) Comma-separated list of log levels
+  - `levels`: (Optional) Comma-separated list of log levels (e.g., `ERROR`, `INFO`, `WARNING`)
   - `query`: (Optional) Search query string
-  - `from_ts`: (Optional) Start time (UNIX timestamp)
-  - `to_ts`: (Optional) End time (UNIX timestamp)
+  - `from_ts`: (Optional) Start time (UNIX timestamp, seconds or ms)
+  - `to_ts`: (Optional) End time (UNIX timestamp, seconds or ms)
   - `prefer`: (Optional) 'head' or 'tail' (default: 'tail')
   - `pagination_id`: (Optional) Token for paginated results
 
-## Project Structure
+#### Example Tool Call (JSON):
 
-```
-mezmo-mcp/
-  .env
-  .env.example
-  server.py
-  memo_api.py
-  tools.py
-  README.md
+```json
+{
+  "count": 10,
+  "apps": "twin-platform",
+  "levels": "ERROR"
+}
 ```
 
 ## Tool: get_logs
@@ -81,16 +99,17 @@ mezmo-mcp/
   - `hosts` (str, optional): Comma-separated list of hosts
   - `levels` (str, optional): Comma-separated list of log levels
   - `query` (str, optional): Search query
-  - `from_ts` (str, optional): Start time (UNIX timestamp)
-  - `to_ts` (str, optional): End time (UNIX timestamp)
+  - `from_ts` (str, optional): Start time (UNIX timestamp, seconds or ms)
+  - `to_ts` (str, optional): End time (UNIX timestamp, seconds or ms)
   - `prefer` (str, optional): 'head' or 'tail' (default: 'tail')
   - `pagination_id` (str, optional): Token for paginated results
 - **Returns:** List of log lines (raw format)
 
-## Notes
-
-- For large exports (>10,000 logs), pagination is supported by the Mezmo API and can be accessed via the `pagination_id` parameter.
-- All API/network errors are handled gracefully with user-friendly messages.
+> **Note:**
+>
+> - These parameters are pulled directly from the [Mezmo Log Analysis Export API documentation](https://docs.mezmo.com/log-analysis-api#export).
+> - For large exports (>10,000 logs), pagination is supported by the Mezmo API and can be accessed via the `pagination_id` parameter.
+> - All API/network errors are handled gracefully with user-friendly messages.
 
 ## References
 
