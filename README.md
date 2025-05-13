@@ -90,6 +90,48 @@ mcp dev server.py
 }
 ```
 
+#### Example: Using `query`, `levels`, and `apps` together
+
+You can use the `query` parameter to filter logs for specific keywords, error codes, or environment tags (like `production` or `staging`).
+
+If your logs include an `environment` field (e.g., `"environment": "production"`), you can filter for production or staging logs by setting `query` to `production` or `staging` respectively. This is a common pattern for differentiating between environments.
+
+Below are some practical examples:
+
+**Find error logs from the `twin-platform` app in the staging environment:**
+
+```json
+{
+  "count": 5,
+  "apps": "twin-platform",
+  "levels": "ERROR",
+  "query": "staging"
+}
+```
+
+**Find error logs from the `twin-platform` app in the production environment:**
+
+```json
+{
+  "count": 5,
+  "apps": "twin-platform",
+  "levels": "ERROR",
+  "query": "production"
+}
+```
+
+**Find logs mentioning a specific feature or service (e.g., Bedrock):**
+
+```json
+{
+  "count": 5,
+  "apps": "twin-platform",
+  "query": "bedrock"
+}
+```
+
+This will return the 5 most recent logs from the `twin-platform` app that contain the word "bedrock" anywhere in the log line.
+
 ## Tool: get_logs
 
 - **Description:** Retrieve logs from Mezmo Export API v2.
