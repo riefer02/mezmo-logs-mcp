@@ -1,6 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 from typing import List
 from memo_api import fetch_latest_logs
+import os
 
 mcp = FastMCP("Mezmo Log MCP")
 
@@ -50,4 +51,6 @@ async def get_logs(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 18080))
+    mcp.run(host=host, port=port)

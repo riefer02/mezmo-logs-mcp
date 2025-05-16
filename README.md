@@ -157,3 +157,55 @@ This will return the 5 most recent logs from the `example-app` app that contain 
 
 - [Mezmo Log Analysis API](https://docs.mezmo.com/log-analysis-api#export)
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+
+## Dockerized MCP Server (2025 Update)
+
+This project now supports running as a fully containerized, discoverable MCP server using Docker. MCP clients (Cursor, Claude Desktop, n8n, etc.) can connect via HTTP/SSE using a simple URL.
+
+### Quick Start
+
+1. **Build the Docker image:**
+   ```sh
+   docker build -t mezmo-mcp .
+   ```
+2. **Run the server:**
+
+   ```sh
+   docker run -d -p 18080:18080 --env-file .env mezmo-mcp
+   ```
+
+   The server will be available at http://localhost:18080
+
+3. **Configure MCP client discovery:**
+   Create or update `.cursor/mcp.json`:
+
+   ```json
+   {
+     "mcpServers": {
+       "mezmo": {
+         "url": "http://localhost:18080",
+         "protocol": "http",
+         "description": "Local Mezmo MCP server running in Docker"
+       }
+     }
+   }
+   ```
+
+   > **Note:** Do not use `host`/`port` fields; use `url` for HTTP/SSE servers.
+
+4. **Test the server:**
+   - Use any MCP client to call the `get_logs` tool.
+   - Example: Retrieve the latest 5 logs.
+
+### Troubleshooting
+
+- If you see errors about missing `command` or `url`, ensure your `.cursor/mcp.json` uses the `url` field as shown above.
+- For remote deployments, update the URL to match your server's public address and port.
+- For advanced usage (e.g., filtering logs), see the tool documentation below.
+
+## Environment Variables
+
+- `MEZMO_API_KEY`: Your Mezmo API key (required)
+- `MEZMO_API_BASE_URL`: (optional) Override the Mezmo API base URL
+- `HOST`: Host to bind the server (default: 0.0.0.0)
+- `PORT`: Port to run the server (default: 18080)
