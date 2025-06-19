@@ -104,18 +104,74 @@ For MCP clients like Claude Desktop, Cursor, or other tools:
 }
 ```
 
-For HTTP-based clients:
+For HTTP-based clients (like Cursor):
 
 ```json
 {
   "mcpServers": {
     "mezmo": {
-      "url": "http://localhost:18080",
+      "url": "http://localhost:18080/mcp",
       "transport": "streamable-http",
-      "description": "Production Mezmo MCP server"
+      "description": "Mezmo log retrieval MCP server - provides access to Mezmo logs and analysis"
     }
   }
 }
+```
+
+**Note:** Make sure to include `/mcp` in the URL path for HTTP transport.
+
+## 🚀 Quick Start with Docker + Cursor
+
+The easiest way to get started is using Docker with Cursor:
+
+### 1. Setup and Run with Docker
+
+```bash
+# Clone and setup
+git clone <repository-url>
+cd mezmo-mcp
+
+# Create environment file and add your API key
+make setup
+# Edit .env file and add your MEZMO_API_KEY
+
+# Run with Docker (persistent container)
+make docker-run
+```
+
+### 2. Configure Cursor
+
+Add this to your `.cursor/mcp.json` file:
+
+```json
+{
+  "mcpServers": {
+    "mezmo": {
+      "url": "http://localhost:18080/mcp",
+      "transport": "streamable-http",
+      "description": "Mezmo log retrieval MCP server"
+    }
+  }
+}
+```
+
+### 3. Restart Cursor and Use
+
+After restarting Cursor, you'll have access to the `get_logs` tool for retrieving and analyzing your Mezmo logs!
+
+### Available Make Commands
+
+```bash
+make setup          # Initial setup and create .env file
+make install         # Install dependencies
+make dev-stdio       # Run in stdio mode for Claude Desktop
+make dev-http        # Run in HTTP mode for Cursor
+make docker-build    # Build Docker image
+make docker-run      # Run Docker container (persistent)
+make docker-stop     # Stop Docker container
+make docker-logs     # View Docker container logs
+make health          # Check server health
+make clean           # Clean up containers and images
 ```
 
 ## 🚀 Running the Server
@@ -123,17 +179,17 @@ For HTTP-based clients:
 ### Local Development
 
 ```bash
-# stdio transport (for local MCP clients)
-python server.py --transport stdio
+# stdio transport (for local MCP clients like Claude Desktop)
+uv run fastmcp run server.py
 
-# HTTP transport (for web-based clients)
-python server.py --transport http --host 0.0.0.0 --port 18080
+# HTTP transport (for web-based clients like Cursor)
+uv run fastmcp run server.py --transport streamable-http --port 18080
 
-# SSE transport (for legacy SSE clients)
-python server.py --transport sse --host 0.0.0.0 --port 18080
+# With custom host and port
+uv run fastmcp run server.py --transport streamable-http --host 0.0.0.0 --port 18080
 
-# With debug logging
-python server.py --transport http --log-level DEBUG
+# Direct Python execution (stdio only)
+python server.py
 ```
 
 ### Docker Deployment
@@ -170,11 +226,13 @@ services:
       - .env
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:18080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:18080/mcp/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+# Or use the provided docker-compose.yml
+# docker-compose up -d
 ```
 
 ## 🔧 API Reference
@@ -339,10 +397,11 @@ python server.py --transport http --log-level DEBUG
 
 ### Debug Mode
 
-Enable detailed logging:
+Enable detailed logging by setting environment variable:
 
 ```bash
-python server.py --transport http --log-level DEBUG
+export MCP_LOG_LEVEL=DEBUG
+uv run fastmcp run server.py --transport streamable-http --port 18080
 ```
 
 ### Docker Troubleshooting
