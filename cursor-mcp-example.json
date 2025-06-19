@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mezmo": {
+      "url": "http://localhost:18080/mcp",
+      "transport": "streamable-http",
+      "description": "Mezmo log retrieval MCP server - provides access to Mezmo logs and analysis"
+    }
+  }
+}
