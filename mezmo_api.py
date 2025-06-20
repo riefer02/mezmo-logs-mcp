@@ -128,11 +128,15 @@ async def fetch_latest_logs(
     # Build request parameters
     url = f"{MEZMO_API_BASE_URL}/v2/export"
     params = {
-        "from": from_ts if from_ts is not None else 0,
-        "to": to_ts if to_ts is not None else 0,
         "size": count,
         "prefer": prefer,
     }
+
+    # Only add timestamp parameters if they are provided
+    if from_ts is not None:
+        params["from"] = from_ts
+    if to_ts is not None:
+        params["to"] = to_ts
 
     # Add optional parameters
     if apps:
