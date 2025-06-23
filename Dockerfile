@@ -36,10 +36,6 @@ USER mcpuser
 # Expose ports
 EXPOSE 18080 9090
 
-# Add health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:18080/health || exit 1
-
 # Use proper signal handling for graceful shutdown
 ENTRYPOINT ["fastmcp", "run", "server.py"]
 CMD ["--transport", "streamable-http", "--host", "0.0.0.0", "--port", "18080"] 
