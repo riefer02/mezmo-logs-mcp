@@ -87,6 +87,8 @@ For **Claude Desktop**:
 }
 ```
 
+**Note**: Claude Desktop uses `stdio` transport (command-based), while Cursor uses HTTP transport. Make sure your Docker container is running before using either client.
+
 ### 4. Start Using
 
 After restarting your MCP client, you'll have access to the `get_logs` tool for retrieving and analyzing your Mezmo logs!
