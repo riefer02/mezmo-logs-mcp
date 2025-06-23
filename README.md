@@ -15,13 +15,13 @@ A production-ready Model Context Protocol (MCP) server that provides robust acce
 - ✅ **Multiple Transport Protocols**: stdio, HTTP, and SSE support
 - ✅ **Structured Logging**: JSON-formatted logs with correlation IDs
 - ✅ **Prometheus Metrics**: Request counters, latency histograms, and gauges
-- ✅ **Health Checks**: Liveness and readiness endpoints for orchestration
 - ✅ **Authentication**: Optional token-based API security
 - ✅ **Connection Pooling**: Efficient HTTP client with automatic retry logic
 - ✅ **Error Handling**: Comprehensive error handling with graceful degradation
 - ✅ **Request Validation**: Pydantic models for input validation
 - ✅ **Configurable Timeouts**: Customizable request and connection timeouts
 - ✅ **Docker Support**: Production-ready containerization
+- ✅ **Smart Defaults**: Works out-of-the-box with sensible 4-hour log window
 
 ## 📋 Prerequisites
 
@@ -132,7 +132,7 @@ git clone <repository-url>
 cd mezmo-mcp
 
 # Create environment file and add your API key
-make setup
+make env
 # Edit .env file and add your MEZMO_API_KEY
 
 # Run with Docker (persistent container)
@@ -162,16 +162,17 @@ After restarting Cursor, you'll have access to the `get_logs` tool for retrievin
 ### Available Make Commands
 
 ```bash
-make setup          # Initial setup and create .env file
-make install         # Install dependencies
-make dev-stdio       # Run in stdio mode for Claude Desktop
-make dev-http        # Run in HTTP mode for Cursor
-make docker-build    # Build Docker image
-make docker-run      # Run Docker container (persistent)
-make docker-stop     # Stop Docker container
-make docker-logs     # View Docker container logs
-make health          # Check server health
-make clean           # Clean up containers and images
+make env            # Create .env file from example
+make install        # Install dependencies
+make dev            # Run in stdio mode for Claude Desktop
+make dev-http       # Run in HTTP mode for Cursor
+make docker-build   # Build Docker image
+make docker-run     # Run Docker container (persistent)
+make docker-stop    # Stop Docker container
+make docker-logs    # View Docker container logs
+make health         # Check server health
+make test-api       # Test Mezmo API connection
+make clean          # Clean up containers and images
 ```
 
 ## 🚀 Running the Server
@@ -225,12 +226,6 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:18080/mcp/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 # Or use the provided docker-compose.yml
 # docker-compose up -d
 ```
@@ -243,6 +238,8 @@ services:
 
 Retrieve logs from Mezmo with comprehensive filtering options.
 
+**⭐ Smart Defaults**: Works out-of-the-box! When no timestamps are specified, automatically retrieves logs from the **last 4 hours** - perfect for debugging production issues.
+
 **Parameters:**
 
 - `count` (int, 1-10000): Number of logs to return (default: 50)
@@ -250,20 +247,33 @@ Retrieve logs from Mezmo with comprehensive filtering options.
 - `hosts` (str, optional): Comma-separated list of hosts
 - `levels` (str, optional): Comma-separated list of log levels
 - `query` (str, optional): Search query string
-- `from_ts` (str, optional): Start time (UNIX timestamp)
-- `to_ts` (str, optional): End time (UNIX timestamp)
+- `from_ts` (str, optional): Start time (UNIX timestamp) - defaults to 4 hours ago
+- `to_ts` (str, optional): End time (UNIX timestamp) - defaults to now
 - `prefer` (str): 'head' or 'tail' ordering (default: 'tail')
 - `pagination_id` (str, optional): Pagination token
 
 **Example Usage:**
 
 ```json
+// Simple usage - gets last 4 hours automatically
+{
+  "count": 50
+}
+
+// With filters - still uses 4-hour window
 {
   "count": 100,
   "apps": "web-app,api-service",
   "levels": "ERROR,WARNING",
-  "query": "database connection",
-  "prefer": "tail"
+  "query": "database connection"
+}
+
+// Custom time range
+{
+  "count": 100,
+  "from_ts": "1640995200",
+  "to_ts": "1640998800",
+  "levels": "ERROR"
 }
 ```
 
@@ -288,12 +298,6 @@ Generate AI-optimized prompts for log analysis.
 - `log_level` (str): Log level to focus on (default: "ERROR")
 
 ## 📊 Monitoring and Observability
-
-### Health Endpoints
-
-- `GET /health` - Basic health check
-- `GET /health/live` - Liveness probe (Kubernetes compatible)
-- `GET /health/ready` - Readiness probe with dependency checks
 
 ### Metrics (Prometheus)
 
@@ -335,7 +339,7 @@ Include the token in client requests:
 
 ```bash
 curl -H "Authorization: Bearer your_secure_token_here" \
-  http://localhost:18080/health
+  http://localhost:18080/mcp/
 ```
 
 ### Best Practices
@@ -352,14 +356,14 @@ curl -H "Authorization: Bearer your_secure_token_here" \
 
 ```bash
 # Test with MCP Inspector
-mcp dev server.py
+fastmcp dev server.py
 
-# Test HTTP endpoint
-curl http://localhost:18080/health
+# Test HTTP endpoint health
+curl http://localhost:18080/mcp/
 
 # Test with authentication
 curl -H "Authorization: Bearer your_token" \
-  http://localhost:18080/health
+  http://localhost:18080/mcp/
 ```
 
 ### Integration Testing
@@ -368,8 +372,8 @@ curl -H "Authorization: Bearer your_token" \
 # Run with test configuration
 python server.py --transport http --log-level DEBUG
 
-# Test log retrieval
-# Use your MCP client to call get_logs tool
+# Test log retrieval using make command
+make test-api
 ```
 
 ## 🐛 Troubleshooting
@@ -391,9 +395,9 @@ python server.py --transport http --log-level DEBUG
    - Verify `MCP_API_TOKEN` is set correctly
    - Ensure client is sending proper Authorization header
 
-4. **Health check failures**
-   - Check Mezmo API connectivity
-   - Verify all dependencies are available
+4. **"from/to timestamp required" errors**
+   - This should not happen with the latest version - the server automatically provides 4-hour defaults
+   - If you see this error, ensure you're using the latest version
 
 ### Debug Mode
 
@@ -408,13 +412,13 @@ uv run fastmcp run server.py --transport streamable-http --port 18080
 
 ```bash
 # Check container logs
-docker logs mezmo-mcp
+docker logs mezmo-mcp-server
 
 # Get shell access
-docker exec -it mezmo-mcp /bin/bash
+docker exec -it mezmo-mcp-server /bin/bash
 
-# Check health status
-docker exec mezmo-mcp curl -f http://localhost:18080/health
+# Check container status
+docker-compose ps
 ```
 
 ## 📈 Performance Optimization
@@ -476,13 +480,13 @@ spec:
                   key: api-key
           livenessProbe:
             httpGet:
-              path: /health/live
+              path: /mcp/
               port: 18080
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /health/ready
+              path: /mcp/
               port: 18080
             initialDelaySeconds: 5
             periodSeconds: 5
