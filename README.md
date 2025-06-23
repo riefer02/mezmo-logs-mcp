@@ -12,7 +12,7 @@ A production-ready Model Context Protocol (MCP) server that provides robust acce
 
 ### Production-Ready Features
 
-- ✅ **Multiple Transport Protocols**: stdio, HTTP, and SSE support
+- ✅ **HTTP Transport**: Streamable HTTP for web-based MCP clients
 - ✅ **Structured Logging**: JSON-formatted logs with correlation IDs
 - ✅ **Prometheus Metrics**: Request counters, latency histograms, and gauges
 - ✅ **Authentication**: Optional token-based API security
@@ -25,48 +25,84 @@ A production-ready Model Context Protocol (MCP) server that provides robust acce
 
 ## 📋 Prerequisites
 
-- Python 3.11+
-- [uv](https://astral.sh/uv/) for environment management (recommended)
+- Docker and Docker Compose
 - Mezmo Service API Key
-- Docker (for containerized deployment)
 
-## 🛠️ Installation
+## 🚀 Quick Start
 
-### Local Development
+### 1. Clone and Setup
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/riefer02/mezmo-logs-mcp
 cd mezmo-mcp
 
-# Create virtual environment and install dependencies
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -r requirements.txt
+# Create environment file
+make env
+# Edit .env file and add your MEZMO_API_KEY
 ```
 
-### Docker Installation
+### 2. Build and Run with Docker
 
 ```bash
-# Build the Docker image
-docker build -t mezmo-mcp:latest .
+# Build and run the Docker container
+make docker-build
+make docker-run
 
-# Or pull from registry (if published)
-docker pull mezmo-mcp:latest
+# Or use docker-compose directly
+docker-compose up -d
 ```
+
+### 3. Configure Your MCP Client
+
+For **Cursor** (recommended):
+
+Add this to your `.cursor/mcp.json` file:
+
+```json
+{
+  "mcpServers": {
+    "mezmo": {
+      "url": "http://localhost:18080/mcp",
+      "transport": "streamable-http",
+      "description": "Mezmo log retrieval MCP server"
+    }
+  }
+}
+```
+
+For **Claude Desktop**:
+
+```json
+{
+  "mcpServers": {
+    "mezmo": {
+      "command": "docker",
+      "args": ["exec", "mezmo-mcp-server", "python", "server.py"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+### 4. Start Using
+
+After restarting your MCP client, you'll have access to the `get_logs` tool for retrieving and analyzing your Mezmo logs!
 
 ## ⚙️ Configuration
 
 ### Environment Variables
 
-Create a `.env` file with the following configuration:
+Create a `.env` file with your Mezmo API key:
 
 ```bash
 # Required: Mezmo API Configuration
 MEZMO_API_KEY=your_service_key_here
 MEZMO_API_BASE_URL=https://api.mezmo.com
 
-# Server Configuration
+# Optional: Server Configuration
 MCP_SERVER_NAME="Mezmo MCP Server"
 MCP_SERVER_HOST=0.0.0.0
 MCP_SERVER_PORT=18080
@@ -86,86 +122,10 @@ MEZMO_MAX_RETRIES=3
 MEZMO_RETRY_DELAY=1.0
 ```
 
-### MCP Client Configuration
-
-For MCP clients like Claude Desktop, Cursor, or other tools:
-
-```json
-{
-  "mcpServers": {
-    "mezmo": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/mezmo-mcp", "run", "server.py"],
-      "env": {
-        "PYTHONUNBUFFERED": "1"
-      }
-    }
-  }
-}
-```
-
-For HTTP-based clients (like Cursor):
-
-```json
-{
-  "mcpServers": {
-    "mezmo": {
-      "url": "http://localhost:18080/mcp",
-      "transport": "streamable-http",
-      "description": "Mezmo log retrieval MCP server - provides access to Mezmo logs and analysis"
-    }
-  }
-}
-```
-
-**Note:** Make sure to include `/mcp` in the URL path for HTTP transport.
-
-## 🚀 Quick Start with Docker + Cursor
-
-The easiest way to get started is using Docker with Cursor:
-
-### 1. Setup and Run with Docker
-
-```bash
-# Clone and setup
-git clone <repository-url>
-cd mezmo-mcp
-
-# Create environment file and add your API key
-make env
-# Edit .env file and add your MEZMO_API_KEY
-
-# Run with Docker (persistent container)
-make docker-run
-```
-
-### 2. Configure Cursor
-
-Add this to your `.cursor/mcp.json` file:
-
-```json
-{
-  "mcpServers": {
-    "mezmo": {
-      "url": "http://localhost:18080/mcp",
-      "transport": "streamable-http",
-      "description": "Mezmo log retrieval MCP server"
-    }
-  }
-}
-```
-
-### 3. Restart Cursor and Use
-
-After restarting Cursor, you'll have access to the `get_logs` tool for retrieving and analyzing your Mezmo logs!
-
-### Available Make Commands
+## 🛠️ Available Make Commands
 
 ```bash
 make env            # Create .env file from example
-make install        # Install dependencies
-make dev            # Run in stdio mode for Claude Desktop
-make dev-http       # Run in HTTP mode for Cursor
 make docker-build   # Build Docker image
 make docker-run     # Run Docker container (persistent)
 make docker-stop    # Stop Docker container
@@ -173,61 +133,6 @@ make docker-logs    # View Docker container logs
 make health         # Check server health
 make test-api       # Test Mezmo API connection
 make clean          # Clean up containers and images
-```
-
-## 🚀 Running the Server
-
-### Local Development
-
-```bash
-# stdio transport (for local MCP clients like Claude Desktop)
-uv run fastmcp run server.py
-
-# HTTP transport (for web-based clients like Cursor)
-uv run fastmcp run server.py --transport streamable-http --port 18080
-
-# With custom host and port
-uv run fastmcp run server.py --transport streamable-http --host 0.0.0.0 --port 18080
-
-# Direct Python execution (stdio only)
-python server.py
-```
-
-### Docker Deployment
-
-```bash
-# Run with environment file
-docker run -d \
-  --name mezmo-mcp \
-  -p 18080:18080 \
-  -p 9090:9090 \
-  --env-file .env \
-  mezmo-mcp:latest
-
-# Run with inline environment variables
-docker run -d \
-  --name mezmo-mcp \
-  -p 18080:18080 \
-  -e MEZMO_API_KEY=your_key_here \
-  -e MCP_ENABLE_METRICS=true \
-  mezmo-mcp:latest
-```
-
-### Docker Compose
-
-```yaml
-version: "3.8"
-services:
-  mezmo-mcp:
-    build: .
-    ports:
-      - "18080:18080"
-      - "9090:9090"
-    env_file:
-      - .env
-    restart: unless-stopped
-# Or use the provided docker-compose.yml
-# docker-compose up -d
 ```
 
 ## 🔧 API Reference
@@ -331,8 +236,9 @@ All logs are output in JSON format for easy parsing:
 Enable token-based authentication:
 
 ```bash
-export MCP_ENABLE_AUTH=true
-export MCP_API_TOKEN=your_secure_token_here
+# In your .env file
+MCP_ENABLE_AUTH=true
+MCP_API_TOKEN=your_secure_token_here
 ```
 
 Include the token in client requests:
@@ -352,28 +258,28 @@ curl -H "Authorization: Bearer your_secure_token_here" \
 
 ## 🧪 Testing
 
-### Manual Testing
+### Quick Health Check
 
 ```bash
-# Test with MCP Inspector
-fastmcp dev server.py
+# Check if the server is running
+make health
 
+# Test Mezmo API connection
+make test-api
+
+# View container logs
+make docker-logs
+```
+
+### Manual API Testing
+
+```bash
 # Test HTTP endpoint health
 curl http://localhost:18080/mcp/
 
-# Test with authentication
+# Test with authentication (if enabled)
 curl -H "Authorization: Bearer your_token" \
   http://localhost:18080/mcp/
-```
-
-### Integration Testing
-
-```bash
-# Run with test configuration
-python server.py --transport http --log-level DEBUG
-
-# Test log retrieval using make command
-make test-api
 ```
 
 ## 🐛 Troubleshooting
@@ -385,15 +291,15 @@ make test-api
    - Ensure your `.env` file contains the API key
    - Check that the environment variable is loaded correctly
 
-2. **Connection timeouts**
+2. **Container won't start**
 
-   - Increase `MEZMO_REQUEST_TIMEOUT` value
+   - Check Docker logs: `make docker-logs`
+   - Verify your `.env` file exists and has the correct API key
+
+3. **Connection timeouts**
+
+   - Increase `MEZMO_REQUEST_TIMEOUT` value in `.env`
    - Check network connectivity to Mezmo API
-
-3. **Authentication failures**
-
-   - Verify `MCP_API_TOKEN` is set correctly
-   - Ensure client is sending proper Authorization header
 
 4. **"from/to timestamp required" errors**
    - This should not happen with the latest version - the server automatically provides 4-hour defaults
@@ -401,53 +307,58 @@ make test-api
 
 ### Debug Mode
 
-Enable detailed logging by setting environment variable:
+Enable detailed logging:
 
 ```bash
-export MCP_LOG_LEVEL=DEBUG
-uv run fastmcp run server.py --transport streamable-http --port 18080
+# In your .env file
+MCP_LOG_LEVEL=DEBUG
+
+# Restart the container
+make docker-stop
+make docker-run
 ```
 
-### Docker Troubleshooting
+### Container Troubleshooting
 
 ```bash
-# Check container logs
-docker logs mezmo-mcp-server
-
-# Get shell access
-docker exec -it mezmo-mcp-server /bin/bash
-
 # Check container status
 docker-compose ps
+
+# View container logs
+make docker-logs
+
+# Get shell access to container
+docker exec -it mezmo-mcp-server /bin/bash
+
+# Restart container
+make docker-stop
+make docker-run
 ```
 
-## 📈 Performance Optimization
+## 🔄 Production Deployment
 
-### Connection Pooling
+### Docker Compose Production
 
-The server uses HTTP connection pooling with configurable limits:
-
-- Max connections: 20
-- Max keepalive connections: 10
-- Keepalive expiry: 30 seconds
-
-### Retry Logic
-
-Automatic retry with exponential backoff:
-
-- Max retries: 3 (configurable)
-- Base delay: 1 second
-- Exponential backoff multiplier: 2
-
-### Timeouts
-
-Configurable timeouts for different operations:
-
-- Connect timeout: 5 seconds
-- Read timeout: 30 seconds (configurable)
-- Pool timeout: 2 seconds
-
-## 🔄 Deployment Strategies
+```yaml
+version: "3.8"
+services:
+  mezmo-mcp:
+    image: mezmo-mcp:latest
+    ports:
+      - "18080:18080"
+      - "9090:9090"
+    environment:
+      - MEZMO_API_KEY=${MEZMO_API_KEY}
+      - MCP_ENABLE_METRICS=true
+      - MCP_LOG_LEVEL=INFO
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+```
 
 ### Kubernetes
 
@@ -491,14 +402,6 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
 ```
-
-### Load Balancing
-
-For high availability, deploy multiple instances behind a load balancer:
-
-- Use health checks for automatic failover
-- Configure session affinity if needed
-- Monitor metrics across all instances
 
 ## 📚 References
 
