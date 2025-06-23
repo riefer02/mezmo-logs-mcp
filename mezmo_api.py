@@ -127,16 +127,23 @@ async def fetch_latest_logs(
 
     # Build request parameters
     url = f"{MEZMO_API_BASE_URL}/v2/export"
+
+    # Mezmo API requires both from and to timestamps
+    # Provide sensible defaults if not specified
+    now = int(time.time())
+    if from_ts is None:
+        # Default to 4 hours ago for "latest" logs - useful for debugging production issues
+        from_ts = str(now - 14400)  # 4 hours * 3600 seconds
+    if to_ts is None:
+        # Default to now
+        to_ts = str(now)
+
     params = {
         "size": count,
         "prefer": prefer,
+        "from": from_ts,
+        "to": to_ts,
     }
-
-    # Only add timestamp parameters if they are provided
-    if from_ts is not None:
-        params["from"] = from_ts
-    if to_ts is not None:
-        params["to"] = to_ts
 
     # Add optional parameters
     if apps:
@@ -297,6 +304,7 @@ async def test_mezmo_connection() -> Dict[str, Any]:
         logger.info("Testing Mezmo API connectivity")
 
         # Try to fetch a small number of logs to test the connection
+        # The function now provides default timestamps automatically
         logs = await fetch_latest_logs(count=1)
 
         result = {
