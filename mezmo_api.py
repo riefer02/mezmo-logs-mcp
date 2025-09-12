@@ -1,6 +1,7 @@
 import os
 import asyncio
 import time
+import random
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -227,8 +228,28 @@ async def fetch_latest_logs(
                         attempt=attempt + 1,
                     )
 
-                    # Don't retry on client errors (4xx)
-                    if 400 <= response.status_code < 500:
+                    # Handle rate limiting (429) with longer backoff
+                    if response.status_code == 429:
+                        last_exception = MezmoAPIError(
+                            f"{error_msg}: {response_text}",
+                            status_code=response.status_code,
+                            response_text=response_text,
+                        )
+                        # Use longer delay for rate limiting
+                        if attempt < MAX_RETRIES - 1:
+                            rate_limit_delay = RETRY_DELAY * (
+                                3**attempt
+                            ) + random.uniform(1, 5)
+                            logger.info(
+                                "Rate limited, using extended backoff",
+                                delay_seconds=rate_limit_delay,
+                                attempt=attempt + 1,
+                            )
+                            await asyncio.sleep(rate_limit_delay)
+                            continue
+
+                    # Don't retry on other client errors (4xx except 429)
+                    elif 400 <= response.status_code < 500:
                         raise MezmoAPIError(
                             f"{error_msg}: {response_text}",
                             status_code=response.status_code,
@@ -236,11 +257,12 @@ async def fetch_latest_logs(
                         )
 
                     # Retry on server errors (5xx) and other issues
-                    last_exception = MezmoAPIError(
-                        f"{error_msg}: {response_text}",
-                        status_code=response.status_code,
-                        response_text=response_text,
-                    )
+                    else:
+                        last_exception = MezmoAPIError(
+                            f"{error_msg}: {response_text}",
+                            status_code=response.status_code,
+                            response_text=response_text,
+                        )
 
         except httpx.TimeoutException as e:
             error_msg = f"Request to Mezmo API timed out after {REQUEST_TIMEOUT}s"
@@ -269,9 +291,11 @@ async def fetch_latest_logs(
             )
             last_exception = MezmoAPIError(error_msg)
 
-        # Wait before retrying (with exponential backoff)
-        if attempt < MAX_RETRIES - 1:
-            delay = RETRY_DELAY * (2**attempt)
+        # Wait before retrying (with exponential backoff) - skip if 429 already handled
+        if attempt < MAX_RETRIES - 1 and (
+            not last_exception or last_exception.status_code != 429
+        ):
+            delay = RETRY_DELAY * (2**attempt) + random.uniform(0.1, 0.5)
             logger.info(
                 "Retrying Mezmo API request",
                 attempt=attempt + 1,
