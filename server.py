@@ -92,7 +92,7 @@ class LogsRequest(BaseModel):
     """Request model for get_logs tool with validation"""
 
     count: int = Field(
-        default=10, ge=1, le=10000, description="Number of logs to return"
+        default=20, ge=1, le=10000, description="Number of logs to return"
     )
     apps: Optional[str] = Field(
         default=None, description="Comma-separated list of applications"
@@ -173,7 +173,7 @@ def initialize_server():
 @mcp.tool
 async def get_logs(
     ctx: Context,
-    count: int = 10,
+    count: int = 20,
     apps: Optional[str] = None,
     hosts: Optional[str] = None,
     levels: Optional[str] = None,
@@ -190,7 +190,7 @@ async def get_logs(
     error handling, and observability features.
 
     Args:
-        count: Number of logs to return (1-10,000, default: 10)
+        count: Number of logs to return (1-10,000, default: 20)
         apps: Comma-separated list of applications to filter
         hosts: Comma-separated list of hosts to filter
         levels: Comma-separated list of log levels (ERROR, INFO, WARNING, etc.)
@@ -314,7 +314,7 @@ async def get_logs(
                     "context": {
                         "status": "rate_limited",
                         "reason": "Exceeded maximum number of concurrent export requests",
-                        "suggestion": "Try again in a few moments with fewer logs (count < 10) or filter by ERROR/WARNING levels",
+                        "suggestion": "Try again in a few moments with fewer logs (count < 20) or filter by ERROR/WARNING levels",
                         "requested_count": request_data.count,
                         "apps": request_data.apps,
                         "levels": request_data.levels,

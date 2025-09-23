@@ -88,7 +88,7 @@ class MezmoAPIError(Exception):
 
 
 async def fetch_latest_logs(
-    count: int = 50,
+    count: int = 20,
     apps: Optional[str] = None,
     hosts: Optional[str] = None,
     levels: Optional[str] = None,
@@ -102,7 +102,7 @@ async def fetch_latest_logs(
     Fetch logs from Mezmo Export API v2 with enhanced error handling and retry logic.
 
     Args:
-        count: Number of logs to return (max 10,000)
+        count: Number of logs to return (max 10,000, default: 20)
         apps: Comma-separated list of applications
         hosts: Comma-separated list of hosts
         levels: Comma-separated list of log levels

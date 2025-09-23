@@ -63,7 +63,7 @@ The `get_logs` tool automatically retrieves logs from the **last 4 hours** when 
 
 ```json
 {
-  "count": 50
+  "count": 20
 }
 ```
 
