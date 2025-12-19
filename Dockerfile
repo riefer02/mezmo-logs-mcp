@@ -37,5 +37,4 @@ USER mcpuser
 EXPOSE 18080 9090
 
 # Use proper signal handling for graceful shutdown
-ENTRYPOINT ["fastmcp", "run", "server.py"]
-CMD ["--transport", "streamable-http", "--host", "0.0.0.0", "--port", "18080"] 
+CMD ["python", "server.py"] 

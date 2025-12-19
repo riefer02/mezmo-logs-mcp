@@ -6,11 +6,8 @@ This server provides a robust, scalable MCP implementation for Mezmo log retriev
 with comprehensive error handling, authentication, health checks, and observability.
 """
 
-import asyncio
 import os
-import sys
 import time
-import logging
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 
@@ -19,7 +16,6 @@ from fastmcp import FastMCP, Context
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 from prometheus_client import Counter, Histogram, Gauge, start_http_server
-import uvicorn
 from dotenv import load_dotenv
 
 from mezmo_api import fetch_latest_logs
@@ -92,7 +88,7 @@ class LogsRequest(BaseModel):
     """Request model for get_logs tool with validation"""
 
     count: int = Field(
-        default=20, ge=1, le=10000, description="Number of logs to return"
+        default=10, ge=1, le=10000, description="Number of logs to return"
     )
     apps: Optional[str] = Field(
         default=None, description="Comma-separated list of applications"
@@ -173,7 +169,7 @@ def initialize_server():
 @mcp.tool
 async def get_logs(
     ctx: Context,
-    count: int = 20,
+    count: int = 10,
     apps: Optional[str] = None,
     hosts: Optional[str] = None,
     levels: Optional[str] = None,
@@ -184,24 +180,46 @@ async def get_logs(
     pagination_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve logs from Mezmo Export API v2 with comprehensive error handling.
+    Retrieve logs from Mezmo Export API v2 with comprehensive filtering.
 
-    This tool provides robust access to Mezmo logs with proper validation,
-    error handling, and observability features.
+    DEFAULTS (quota-conscious):
+    - Time Range: Last 6 hours
+    - Count: 10 logs
+    - Levels: All levels
+
+    FILTERING OPTIONS (combine for precision):
+    - apps: Filter by application name (e.g., "my-app,web-app")
+    - hosts: Filter by host/container ID
+    - levels: Filter by severity (e.g., "ERROR,WARNING,INFO")
+    - query: Search log content (e.g., resource IDs, error messages, user IDs)
+    - from_ts/to_ts: Custom time range (UNIX timestamps in seconds)
+
+    QUERY EXAMPLES:
+    - Find by resource ID: query="user_id_12345"
+    - Find errors with keyword: query="database connection" + levels="ERROR"
+    - Find in specific app: apps="my-app" + query="ConnectionError"
+    - Multiple apps: apps="web-app,api-service"
+
+    BEST PRACTICES:
+    1. Start tiny (3-5 logs) to discover apps/shape of data
+    2. Add app filter to narrow results (saves 90%+ quota)
+    3. Add levels filter (ERROR/WARNING) to reduce noise
+    4. Add query for specific searches (UUIDs, error messages, etc.)
+    5. Increase count only after filters are in place (e.g., 20-50)
 
     Args:
-        count: Number of logs to return (1-10,000, default: 20)
-        apps: Comma-separated list of applications to filter
-        hosts: Comma-separated list of hosts to filter
-        levels: Comma-separated list of log levels (ERROR, INFO, WARNING, etc.)
-        query: Search query string for log content
-        from_ts: Start time as UNIX timestamp (seconds or milliseconds)
-        to_ts: End time as UNIX timestamp (seconds or milliseconds)
-        prefer: Preference for 'head' or 'tail' ordering (default: 'tail')
-        pagination_id: Token for retrieving paginated results
+        count: Number of logs (1-10,000, default: 10)
+        apps: App names, comma-separated (e.g., "my-app")
+        hosts: Host IDs, comma-separated
+        levels: Log levels, comma-separated (e.g., "ERROR,WARNING")
+        query: Search string (matches log content)
+        from_ts: Start time, UNIX seconds (default: 6 hours ago)
+        to_ts: End time, UNIX seconds (default: now)
+        prefer: 'head' or 'tail' (default: 'tail' = newest first)
+        pagination_id: Token for next page
 
     Returns:
-        List of log entries from Mezmo API
+        List of log entries with full context
 
     Raises:
         ToolError: When API request fails or validation errors occur
@@ -224,6 +242,17 @@ async def get_logs(
         if ENABLE_METRICS:
             REQUEST_COUNT.labels(tool_name="get_logs", status="validation_error").inc()
         raise ToolError(str(e))
+
+    # Log the request to terminal
+    filters = []
+    if request_data.apps:
+        filters.append(f"apps={request_data.apps}")
+    if request_data.levels:
+        filters.append(f"levels={request_data.levels}")
+    if request_data.query:
+        filters.append(f"query={request_data.query}")
+    filter_str = f" [{', '.join(filters)}]" if filters else ""
+    print(f"→ get_logs: count={request_data.count}{filter_str}")
 
     # Log the request with context
     logger.info(
@@ -279,70 +308,52 @@ async def get_logs(
         return logs
 
     except Exception as e:
-        # Check if this is a rate limiting error
-        if (
+        # Log errors to terminal
+        error_type = type(e).__name__
+        is_rate_limit = (
             "429" in str(e)
             or "rate limit" in str(e).lower()
             or "concurrent" in str(e).lower()
-        ):
-            # Return rate limiting as context, not error
-            logger.warning(
-                "Mezmo API rate limited - returning context",
-                error=str(e),
-                count=request_data.count,
-                apps=request_data.apps,
-            )
+        )
 
-            # Update metrics
-            if ENABLE_METRICS:
-                REQUEST_COUNT.labels(tool_name="get_logs", status="rate_limited").inc()
-                REQUEST_LATENCY.labels(tool_name="get_logs").observe(
-                    time.time() - start_time
-                )
-
-            # Notify client with context
-            await ctx.info(
-                "Mezmo API is currently rate limited - try reducing request frequency or count"
-            )
-
-            # Return structured response indicating rate limiting
-            return [
-                {
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "level": "INFO",
-                    "message": "Mezmo API Rate Limited",
-                    "context": {
-                        "status": "rate_limited",
-                        "reason": "Exceeded maximum number of concurrent export requests",
-                        "suggestion": "Try again in a few moments with fewer logs (count < 20) or filter by ERROR/WARNING levels",
-                        "requested_count": request_data.count,
-                        "apps": request_data.apps,
-                        "levels": request_data.levels,
-                    },
-                }
-            ]
-
-        # For other errors, log and raise
+        # Log error
         logger.error(
             "Failed to retrieve logs from Mezmo",
             error=str(e),
-            error_type=type(e).__name__,
+            error_type=error_type,
             count=request_data.count,
             apps=request_data.apps,
+            is_rate_limit=is_rate_limit,
         )
 
-        # Update error metrics
+        # Update error metrics (with specific label for rate limiting)
         if ENABLE_METRICS:
-            REQUEST_COUNT.labels(tool_name="get_logs", status="error").inc()
+            status = "rate_limited" if is_rate_limit else "error"
+            REQUEST_COUNT.labels(tool_name="get_logs", status=status).inc()
             REQUEST_LATENCY.labels(tool_name="get_logs").observe(
                 time.time() - start_time
             )
 
-        # Notify client of error
-        await ctx.error(f"Failed to retrieve logs: {str(e)}")
+        # Provide helpful error message to agent
+        if is_rate_limit:
+            error_msg = (
+                f"Mezmo API Rate Limited: {str(e)}\n\n"
+                "The Mezmo API has rejected the request due to rate limiting. "
+                "Suggestions:\n"
+                "1. Wait 30-60 seconds before trying again\n"
+                "2. Reduce count (try count=3 or count=5)\n"
+                "3. Filter by app (apps='my-app') to drastically reduce volume\n"
+                "4. Filter by levels (levels='ERROR' or levels='WARNING')\n"
+                "5. Avoid making multiple concurrent requests"
+            )
+        else:
+            error_msg = f"Failed to retrieve logs from Mezmo: {str(e)}"
 
-        # Re-raise as ToolError for proper client handling
-        raise ToolError(str(e))
+        # Notify client of error
+        await ctx.error(error_msg)
+
+        # Always raise ToolError so the agent knows the tool failed
+        raise ToolError(error_msg)
 
 
 @mcp.resource("health://status")
@@ -399,27 +410,56 @@ Search Query: {query}
 Time Range: {time_range}
 Log Level: {log_level}
 
-IMPORTANT: Start with ERROR and WARNING logs first as they indicate issues requiring attention.
+QUOTA-CONSCIOUS WORKFLOW (Mezmo has account limits):
 
-Use the get_logs tool to retrieve relevant logs. Start with a small count (5-10) to avoid rate limits:
-1. First, get ERROR logs: get_logs(count=5, levels="ERROR", query="{query}")
-2. Then, get WARNING logs: get_logs(count=5, levels="WARNING", query="{query}")
-3. If rate limited, the response will contain context about the limitation - acknowledge this and work with available data
+Step 1: DISCOVER (3-5 logs)
+See what apps are active:
+  get_logs(count=3)
+  get_logs(count=5)
+
+Step 2: FILTER BY APP
+Narrow to specific app (saves 90%+ quota):
+  get_logs(count=10, apps="my-app", levels="ERROR,WARNING")
+
+Step 3: SEARCH SPECIFIC ISSUES
+Use query for precise searches:
+  get_logs(count=10, apps="my-app", query="user_id_12345")
+  get_logs(count=20, apps="my-app", query="ConnectionError", levels="ERROR")
+
+Step 4: SCALE UP (only if needed)
+Once filters are working and you need more context:
+  get_logs(count=50, apps="my-app", query="ConnectionError", levels="ERROR")
+
+FILTERING OPTIONS:
+- **apps**: Filter by application (e.g., apps="my-app,web-app")
+- **hosts**: Filter by host/container ID
+- **levels**: Filter severity (e.g., levels="ERROR,WARNING,INFO")
+- **query**: Search log content - resource IDs, error messages, keywords
+- **from_ts/to_ts**: Custom time range (UNIX seconds)
+
+SEARCH EXAMPLES:
+- Find resource: query="uuid-1234-5678-abcd"
+- Find error type: query="ConnectionError" + levels="ERROR"
+- Find user activity: query="user_email@example.com"
+- Find API calls: query="/api/endpoint" + apps="api-service"
 
 Analysis steps:
-1. **Priority Issues**: Identify critical errors and warnings first
-2. **Patterns**: Look for recurring error patterns or trends
-3. **Impact Assessment**: Determine severity and potential system impact
-4. **Root Cause**: Analyze error messages for underlying causes
-5. **Recommendations**: Provide specific, actionable remediation steps
+1. **Discover**: 5 logs to see active apps
+2. **Filter**: Add apps filter (massive quota savings)
+3. **Search**: Add query for specific resource IDs, errors, users
+4. **Refine**: Add levels filter to focus on ERROR/WARNING
+5. **Analyze**: Look for patterns in filtered results
+6. **Recommend**: Provide actionable fixes
 
-If you encounter rate limiting, focus analysis on the context provided and suggest:
-- Reducing log count requests
-- Using more specific time ranges
-- Filtering by specific error levels
-- Trying again after a brief wait
+QUOTA BEST PRACTICES:
+✓ Always use apps filter (saves 90%+ quota)
+✓ Use query to search specific IDs, errors, keywords
+✓ Combine filters: apps + query + levels
+✓ Start tiny: count=3-5 for discovery
+✓ Default count is 10; increase only after adding filters
+✓ Default 6-hour window is usually enough
 
-Focus on actionable insights that help with immediate troubleshooting.
+Focus on actionable insights that help with immediate troubleshooting while respecting account quota limits.
 """
 
     logger.info(
@@ -449,8 +489,8 @@ def main():
     # Initialize server components
     initialize_server()
 
-    # Run the server (default is stdio)
-    mcp.run()
+    # Run the server with HTTP transport
+    mcp.run(transport="http", host="0.0.0.0", port=18080, path="/mcp")
 
 
 if __name__ == "__main__":

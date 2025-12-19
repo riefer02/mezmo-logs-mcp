@@ -88,7 +88,7 @@ class MezmoAPIError(Exception):
 
 
 async def fetch_latest_logs(
-    count: int = 20,
+    count: int = 10,
     apps: Optional[str] = None,
     hosts: Optional[str] = None,
     levels: Optional[str] = None,
@@ -102,7 +102,7 @@ async def fetch_latest_logs(
     Fetch logs from Mezmo Export API v2 with enhanced error handling and retry logic.
 
     Args:
-        count: Number of logs to return (max 10,000, default: 20)
+        count: Number of logs to return (max 10,000, default: 10)
         apps: Comma-separated list of applications
         hosts: Comma-separated list of hosts
         levels: Comma-separated list of log levels
@@ -119,9 +119,9 @@ async def fetch_latest_logs(
         MezmoAPIError: When API request fails after retries
         ValueError: When parameters are invalid
     """
-    # Validate parameters
+    # Validate parameters per Mezmo Export API v2 spec
     if count < 1 or count > 10000:
-        raise ValueError(f"Count must be between 1 and 10000, got {count}")
+        raise ValueError(f"Count must be between 1 and 10,000 per API spec, got {count}")
 
     if prefer not in ["head", "tail"]:
         raise ValueError(f"Prefer must be 'head' or 'tail', got {prefer}")
@@ -129,18 +129,19 @@ async def fetch_latest_logs(
     # Build request parameters
     url = f"{MEZMO_API_BASE_URL}/v2/export"
 
-    # Mezmo API requires both from and to timestamps
+    # Mezmo API requires both from and to timestamps IN SECONDS
     # Provide sensible defaults if not specified
     now = int(time.time())
     if from_ts is None:
-        # Default to 4 hours ago for "latest" logs - useful for debugging production issues
-        from_ts = str(now - 14400)  # 4 hours * 3600 seconds
+        # Default to 6 hours ago - balance between quota and finding actual logs
+        from_ts = str(now - 21600)  # 6 hours in seconds
     if to_ts is None:
         # Default to now
-        to_ts = str(now)
+        to_ts = str(now)  # UNIX timestamp in seconds
 
+    # Map to Mezmo API v2 parameters
     params = {
-        "size": count,
+        "size": count,  # API uses 'size', we expose as 'count'
         "prefer": prefer,
         "from": from_ts,
         "to": to_ts,
@@ -153,6 +154,7 @@ async def fetch_latest_logs(
         params["hosts"] = hosts
     if levels:
         params["levels"] = levels
+    # NOTE: Do not set default levels - let Mezmo return all levels if not specified
     if query:
         params["query"] = query
     if pagination_id:
@@ -194,6 +196,9 @@ async def fetch_latest_logs(
                         data = response.json()
                         logs = data.get("lines", [])
 
+                        # Log success to terminal
+                        print(f"✓ Mezmo API: Retrieved {len(logs)} logs in {round(request_duration, 3)}s")
+
                         logger.info(
                             "Successfully retrieved logs from Mezmo",
                             logs_retrieved=len(logs),
@@ -203,6 +208,9 @@ async def fetch_latest_logs(
                         return logs
 
                     except Exception as e:
+                        # Log parsing error to terminal
+                        print(f"✗ Mezmo API: Parse error - {str(e)}")
+                        
                         logger.error(
                             "Failed to parse Mezmo API response",
                             error=str(e),
@@ -220,6 +228,9 @@ async def fetch_latest_logs(
                     response_text = (
                         response.text[:500] if response.text else "No response body"
                     )
+
+                    # Log error to terminal
+                    print(f"✗ Mezmo API: Status {response.status_code} (attempt {attempt + 1}/{MAX_RETRIES})")
 
                     logger.warning(
                         "Mezmo API request failed",
@@ -240,6 +251,7 @@ async def fetch_latest_logs(
                             rate_limit_delay = RETRY_DELAY * (
                                 3**attempt
                             ) + random.uniform(1, 5)
+                            print(f"  ⏳ Rate limited, waiting {round(rate_limit_delay, 1)}s...")
                             logger.info(
                                 "Rate limited, using extended backoff",
                                 delay_seconds=rate_limit_delay,
@@ -266,6 +278,8 @@ async def fetch_latest_logs(
 
         except httpx.TimeoutException as e:
             error_msg = f"Request to Mezmo API timed out after {REQUEST_TIMEOUT}s"
+            print(f"✗ Mezmo API: Timeout after {REQUEST_TIMEOUT}s (attempt {attempt + 1}/{MAX_RETRIES})")
+            
             logger.warning(
                 "Mezmo API request timeout",
                 timeout_seconds=REQUEST_TIMEOUT,
@@ -276,6 +290,8 @@ async def fetch_latest_logs(
 
         except httpx.ConnectError as e:
             error_msg = f"Failed to connect to Mezmo API: {e}"
+            print(f"✗ Mezmo API: Connection error (attempt {attempt + 1}/{MAX_RETRIES})")
+            
             logger.warning(
                 "Mezmo API connection error", attempt=attempt + 1, error=str(e)
             )
@@ -283,6 +299,8 @@ async def fetch_latest_logs(
 
         except Exception as e:
             error_msg = f"Unexpected error calling Mezmo API: {e}"
+            print(f"✗ Mezmo API: {type(e).__name__} - {str(e)[:100]} (attempt {attempt + 1}/{MAX_RETRIES})")
+            
             logger.error(
                 "Unexpected error in Mezmo API call",
                 attempt=attempt + 1,
@@ -305,6 +323,8 @@ async def fetch_latest_logs(
             await asyncio.sleep(delay)
 
     # All retries exhausted
+    print(f"✗ Mezmo API: All {MAX_RETRIES} retry attempts failed")
+    
     logger.error(
         "All Mezmo API retry attempts failed",
         max_retries=MAX_RETRIES,

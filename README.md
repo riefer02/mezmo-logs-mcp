@@ -1,6 +1,19 @@
 # Mezmo MCP Server
 
-A Model Context Protocol (MCP) server for retrieving logs from Mezmo. Works out-of-the-box with automatic 4-hour time windows - just add your API key and run!
+A Model Context Protocol (MCP) server for retrieving logs from Mezmo. Quota-conscious design with intelligent defaults - just add your API key and run!
+
+## ⚡ Smart Defaults
+
+- **Time Range**: Last 6 hours (when not specified) - balances quota with finding actual logs
+- **Log Count**: 10 logs per request
+- **Log Levels**: All levels (you control filtering)
+
+**Recommended Workflow**:
+1. First, fetch 3-5 logs to discover available apps and log shape
+2. Then, filter by specific app(s) you're debugging
+3. Add level filtering for ERROR/WARNING to reduce noise
+4. Increase count only after filters are in place (e.g., 20-50)
+5. This approach minimizes quota usage significantly!
 
 ## 🚀 Quick Start
 
@@ -57,36 +70,55 @@ Restart your MCP client and you'll have access to the `get_logs` tool!
 
 ## 📋 Usage
 
-The `get_logs` tool automatically retrieves logs from the **last 4 hours** when no time range is specified - perfect for debugging.
+The `get_logs` tool automatically retrieves logs from the **last 6 hours** when no time range is specified - perfect for debugging while conserving quota.
 
-**Simple usage:**
+**Step 1: Discover available apps (3-5 logs):**
 
 ```json
 {
-  "count": 20
+  "count": 3,
+  "levels": "ERROR,WARNING"
 }
 ```
 
-**With filters:**
+**Step 2: Filter by specific app:**
 
 ```json
 {
-  "count": 100,
+  "count": 10,
+  "apps": "web-app",
+  "levels": "ERROR,WARNING"
+}
+```
+
+**Advanced filtering (scale up only after filters work):**
+
+```json
+{
+  "count": 50,
   "apps": "web-app,api-service",
   "levels": "ERROR,WARNING",
   "query": "database connection"
 }
 ```
 
-**Custom time range:**
+**Custom time range (use sparingly - impacts quota):**
 
 ```json
 {
-  "count": 100,
+  "count": 50,
+  "apps": "web-app",
   "from_ts": "1640995200",
   "to_ts": "1640998800"
 }
 ```
+
+### 💡 Quota-Conscious Tips
+
+1. **Always filter by app** when possible - this drastically reduces results
+2. **Start tiny** - use count=3-5 for discovery, then increase if needed
+3. **Add level filtering** - specify levels="ERROR,WARNING" to reduce noise
+4. **Use default 6-hour window** unless you need wider historical data
 
 ## 🛠️ Commands
 
