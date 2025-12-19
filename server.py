@@ -188,7 +188,7 @@ async def get_logs(
     - Levels: All levels
 
     FILTERING OPTIONS (combine for precision):
-    - apps: Filter by application name (e.g., "my-app,web-app")
+    - apps: Filter by application name (e.g., "app-a,app-b")
     - hosts: Filter by host/container ID
     - levels: Filter by severity (e.g., "ERROR,WARNING,INFO")
     - query: Search log content (e.g., resource IDs, error messages, user IDs)
@@ -197,8 +197,8 @@ async def get_logs(
     QUERY EXAMPLES:
     - Find by resource ID: query="user_id_12345"
     - Find errors with keyword: query="database connection" + levels="ERROR"
-    - Find in specific app: apps="my-app" + query="ConnectionError"
-    - Multiple apps: apps="web-app,api-service"
+    - Find in specific app: apps="app-a" + query="ConnectionError"
+    - Multiple apps: apps="app-a,app-b"
 
     BEST PRACTICES:
     1. Start tiny (3-5 logs) to discover apps/shape of data
@@ -209,7 +209,7 @@ async def get_logs(
 
     Args:
         count: Number of logs (1-10,000, default: 10)
-        apps: App names, comma-separated (e.g., "my-app")
+        apps: App names, comma-separated (e.g., "app-a")
         hosts: Host IDs, comma-separated
         levels: Log levels, comma-separated (e.g., "ERROR,WARNING")
         query: Search string (matches log content)
@@ -342,7 +342,7 @@ async def get_logs(
                 "Suggestions:\n"
                 "1. Wait 30-60 seconds before trying again\n"
                 "2. Reduce count (try count=3 or count=5)\n"
-                "3. Filter by app (apps='my-app') to drastically reduce volume\n"
+                "3. Filter by app (apps='app-a') to drastically reduce volume\n"
                 "4. Filter by levels (levels='ERROR' or levels='WARNING')\n"
                 "5. Avoid making multiple concurrent requests"
             )
@@ -419,29 +419,29 @@ See what apps are active:
 
 Step 2: FILTER BY APP
 Narrow to specific app (saves 90%+ quota):
-  get_logs(count=10, apps="my-app", levels="ERROR,WARNING")
+  get_logs(count=10, apps="app-a", levels="ERROR,WARNING")
 
 Step 3: SEARCH SPECIFIC ISSUES
 Use query for precise searches:
-  get_logs(count=10, apps="my-app", query="user_id_12345")
-  get_logs(count=20, apps="my-app", query="ConnectionError", levels="ERROR")
+  get_logs(count=10, apps="app-a", query="user_id_12345")
+  get_logs(count=20, apps="app-a", query="ConnectionError", levels="ERROR")
 
 Step 4: SCALE UP (only if needed)
 Once filters are working and you need more context:
-  get_logs(count=50, apps="my-app", query="ConnectionError", levels="ERROR")
+  get_logs(count=50, apps="app-a", query="ConnectionError", levels="ERROR")
 
 FILTERING OPTIONS:
-- **apps**: Filter by application (e.g., apps="my-app,web-app")
+- **apps**: Filter by application (e.g., apps="app-a,app-b")
 - **hosts**: Filter by host/container ID
 - **levels**: Filter severity (e.g., levels="ERROR,WARNING,INFO")
 - **query**: Search log content - resource IDs, error messages, keywords
 - **from_ts/to_ts**: Custom time range (UNIX seconds)
 
 SEARCH EXAMPLES:
-- Find resource: query="uuid-1234-5678-abcd"
+- Find resource: query="trace_id=abcdef1234" or query="request_id=xyz-123"
 - Find error type: query="ConnectionError" + levels="ERROR"
-- Find user activity: query="user_email@example.com"
-- Find API calls: query="/api/endpoint" + apps="api-service"
+- Find user activity: query="user_id_12345"
+- Find API calls: query="/api/endpoint" + apps="app-a"
 
 Analysis steps:
 1. **Discover**: 5 logs to see active apps

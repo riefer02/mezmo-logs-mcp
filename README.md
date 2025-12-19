@@ -25,11 +25,13 @@ Get your Mezmo Service API key from the Mezmo dashboard.
 
 ```bash
 # Clone the repository
-git clone https://github.com/riefer02/mezmo-logs-mcp
-cd mezmo-mcp
+# (replace with your fork/clone URL)
+git clone <your-repo-url>
+cd <your-repo-dir>
 
-# Create .env file with your API key
-echo "MEZMO_API_KEY=your_service_key_here" > .env
+# Create your local .env (never commit it)
+cp env.example .env
+# then edit .env and set MEZMO_API_KEY
 
 # Build and run
 docker-compose up -d
@@ -86,7 +88,7 @@ The `get_logs` tool automatically retrieves logs from the **last 6 hours** when 
 ```json
 {
   "count": 10,
-  "apps": "web-app",
+  "apps": "app-a",
   "levels": "ERROR,WARNING"
 }
 ```
@@ -96,7 +98,7 @@ The `get_logs` tool automatically retrieves logs from the **last 6 hours** when 
 ```json
 {
   "count": 50,
-  "apps": "web-app,api-service",
+  "apps": "app-a,app-b",
   "levels": "ERROR,WARNING",
   "query": "database connection"
 }
@@ -107,7 +109,7 @@ The `get_logs` tool automatically retrieves logs from the **last 6 hours** when 
 ```json
 {
   "count": 50,
-  "apps": "web-app",
+  "apps": "app-a",
   "from_ts": "1640995200",
   "to_ts": "1640998800"
 }
@@ -119,6 +121,12 @@ The `get_logs` tool automatically retrieves logs from the **last 6 hours** when 
 2. **Start tiny** - use count=3-5 for discovery, then increase if needed
 3. **Add level filtering** - specify levels="ERROR,WARNING" to reduce noise
 4. **Use default 6-hour window** unless you need wider historical data
+
+### 🔐 Security / Secrets
+
+- **Never commit `.env`** (it contains your `MEZMO_API_KEY`).
+- Prefer using `.env.example` as a template and keep your real values local.
+- If you enable MCP authentication (`MCP_ENABLE_AUTH=true`), keep `MCP_API_TOKEN` secret as well.
 
 ## 🛠️ Commands
 

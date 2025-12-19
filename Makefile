@@ -147,9 +147,9 @@ health:
 test-api:
 	@echo "🔗 Testing Mezmo API connection..."
 	@if command -v uv >/dev/null 2>&1; then \
-		uv run python -c "import asyncio; from memo_api import test_mezmo_connection; print(asyncio.run(test_mezmo_connection()))"; \
+		uv run python -c "import asyncio; from mezmo_api import test_mezmo_connection; print(asyncio.run(test_mezmo_connection()))"; \
 	else \
-		. .venv/bin/activate && python -c "import asyncio; from memo_api import test_mezmo_connection; print(asyncio.run(test_mezmo_connection()))"; \
+		. .venv/bin/activate && python -c "import asyncio; from mezmo_api import test_mezmo_connection; print(asyncio.run(test_mezmo_connection()))"; \
 	fi
 
 quick-test: dev-http &
