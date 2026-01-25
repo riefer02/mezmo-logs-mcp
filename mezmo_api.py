@@ -2,8 +2,10 @@ import os
 import asyncio
 import time
 import random
-from typing import Optional, List, Dict, Any
+import uuid
+from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
+from enum import Enum
 
 import httpx
 import structlog
@@ -20,6 +22,11 @@ MEZMO_API_BASE_URL = os.getenv("MEZMO_API_BASE_URL", "https://api.mezmo.com")
 REQUEST_TIMEOUT = int(os.getenv("MEZMO_REQUEST_TIMEOUT", "30"))
 MAX_RETRIES = int(os.getenv("MEZMO_MAX_RETRIES", "3"))
 RETRY_DELAY = float(os.getenv("MEZMO_RETRY_DELAY", "1.0"))
+MAX_RETRY_DELAY = 30.0  # Cap retry delay at 30 seconds
+
+# Circuit breaker configuration
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5"))
+CIRCUIT_BREAKER_RECOVERY_TIMEOUT = float(os.getenv("CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "60.0"))
 
 if not MEZMO_API_KEY:
     raise RuntimeError("MEZMO_API_KEY is not set in environment variables.")
@@ -80,11 +87,107 @@ class MezmoAPIError(Exception):
         message: str,
         status_code: Optional[int] = None,
         response_text: Optional[str] = None,
+        retry_after: Optional[int] = None,
     ):
         self.message = message
         self.status_code = status_code
         self.response_text = response_text
+        self.retry_after = retry_after
         super().__init__(message)
+
+
+class CircuitBreakerState(Enum):
+    """Circuit breaker states"""
+    CLOSED = "closed"      # Normal operation, requests pass through
+    OPEN = "open"          # Failures exceeded threshold, reject requests
+    HALF_OPEN = "half_open"  # Testing if service recovered
+
+
+class CircuitBreaker:
+    """
+    Circuit breaker pattern implementation for Mezmo API.
+
+    Prevents cascading failures by stopping requests when the API is failing.
+    States:
+    - CLOSED: Normal operation, requests pass through
+    - OPEN: Too many failures, requests are rejected immediately
+    - HALF_OPEN: Testing recovery, allows one request through
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+        recovery_timeout: float = CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+    ):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.state = CircuitBreakerState.CLOSED
+        self.failure_count = 0
+        self.last_failure_time: Optional[float] = None
+        self._lock = asyncio.Lock()
+
+    async def can_proceed(self) -> bool:
+        """Check if a request can proceed based on circuit state."""
+        async with self._lock:
+            if self.state == CircuitBreakerState.CLOSED:
+                return True
+
+            if self.state == CircuitBreakerState.OPEN:
+                # Check if recovery timeout has elapsed
+                if self.last_failure_time and (time.time() - self.last_failure_time) >= self.recovery_timeout:
+                    self.state = CircuitBreakerState.HALF_OPEN
+                    logger.info(
+                        "Circuit breaker transitioning to HALF_OPEN",
+                        recovery_timeout=self.recovery_timeout,
+                    )
+                    return True
+                return False
+
+            # HALF_OPEN: allow one request through to test recovery
+            return True
+
+    async def record_success(self) -> None:
+        """Record a successful request."""
+        async with self._lock:
+            if self.state == CircuitBreakerState.HALF_OPEN:
+                logger.info("Circuit breaker closing after successful recovery test")
+            self.failure_count = 0
+            self.state = CircuitBreakerState.CLOSED
+
+    async def record_failure(self) -> None:
+        """Record a failed request."""
+        async with self._lock:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+
+            if self.state == CircuitBreakerState.HALF_OPEN:
+                # Recovery test failed, go back to OPEN
+                self.state = CircuitBreakerState.OPEN
+                logger.warning(
+                    "Circuit breaker reopening after failed recovery test",
+                    failure_count=self.failure_count,
+                )
+            elif self.failure_count >= self.failure_threshold:
+                self.state = CircuitBreakerState.OPEN
+                logger.warning(
+                    "Circuit breaker opening due to failures",
+                    failure_count=self.failure_count,
+                    threshold=self.failure_threshold,
+                )
+
+    def get_state(self) -> Dict[str, Any]:
+        """Get current circuit breaker state for monitoring."""
+        return {
+            "state": self.state.value,
+            "failure_count": self.failure_count,
+            "failure_threshold": self.failure_threshold,
+            "last_failure_time": self.last_failure_time,
+            "recovery_timeout": self.recovery_timeout,
+        }
+
+
+# Global circuit breaker instance
+_circuit_breaker = CircuitBreaker()
 
 
 async def fetch_latest_logs(
@@ -97,7 +200,8 @@ async def fetch_latest_logs(
     to_ts: Optional[str] = None,
     prefer: Optional[str] = "tail",
     pagination_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    correlation_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Fetch logs from Mezmo Export API v2 with enhanced error handling and retry logic.
 
@@ -111,14 +215,33 @@ async def fetch_latest_logs(
         to_ts: End time (UNIX timestamp)
         prefer: 'head' or 'tail' (default: 'tail')
         pagination_id: Token for paginated results
+        correlation_id: Request correlation ID for tracing
 
     Returns:
-        List of log lines as dictionaries
+        Dictionary with 'logs', 'pagination_id', and 'has_more' keys
 
     Raises:
         MezmoAPIError: When API request fails after retries
         ValueError: When parameters are invalid
     """
+    # Generate correlation ID if not provided
+    if correlation_id is None:
+        correlation_id = str(uuid.uuid4())
+    log = logger.bind(correlation_id=correlation_id)
+
+    # Check circuit breaker before proceeding
+    if not await _circuit_breaker.can_proceed():
+        cb_state = _circuit_breaker.get_state()
+        log.warning(
+            "Circuit breaker is OPEN, rejecting request",
+            circuit_breaker_state=cb_state,
+        )
+        raise MezmoAPIError(
+            "Circuit breaker OPEN - Mezmo API unavailable. "
+            f"Service will retry automatically after {CIRCUIT_BREAKER_RECOVERY_TIMEOUT}s. "
+            "Too many recent failures indicate the API is experiencing issues.",
+            status_code=503,
+        )
     # Validate parameters per Mezmo Export API v2 spec
     if count < 1 or count > 10000:
         raise ValueError(f"Count must be between 1 and 10,000 per API spec, got {count}")
@@ -163,7 +286,7 @@ async def fetch_latest_logs(
     headers = {"servicekey": MEZMO_API_KEY}
 
     # Log the request
-    logger.info(
+    log.info(
         "Making request to Mezmo API",
         url=url,
         params={k: v for k, v in params.items() if k != "servicekey"},
@@ -183,7 +306,7 @@ async def fetch_latest_logs(
 
                 request_duration = time.time() - start_time
 
-                logger.info(
+                log.info(
                     "Mezmo API request completed",
                     status_code=response.status_code,
                     duration_seconds=round(request_duration, 3),
@@ -196,26 +319,29 @@ async def fetch_latest_logs(
                         data = response.json()
                         logs = data.get("lines", [])
 
-                        # Log success to terminal
-                        print(f"✓ Mezmo API: Retrieved {len(logs)} logs in {round(request_duration, 3)}s")
-
-                        logger.info(
+                        log.info(
                             "Successfully retrieved logs from Mezmo",
                             logs_retrieved=len(logs),
                             total_duration=round(request_duration, 3),
                         )
 
-                        return logs
+                        # Record success for circuit breaker
+                        await _circuit_breaker.record_success()
+
+                        # Return structured response with metadata
+                        return {
+                            "logs": logs,
+                            "pagination_id": data.get("pagination_id"),
+                            "has_more": len(logs) == count,
+                        }
 
                     except Exception as e:
-                        # Log parsing error to terminal
-                        print(f"✗ Mezmo API: Parse error - {str(e)}")
-                        
-                        logger.error(
+                        log.error(
                             "Failed to parse Mezmo API response",
                             error=str(e),
                             response_text=response.text[:500],
                         )
+                        await _circuit_breaker.record_failure()
                         raise MezmoAPIError(
                             f"Failed to parse Mezmo API response: {e}",
                             status_code=response.status_code,
@@ -229,32 +355,46 @@ async def fetch_latest_logs(
                         response.text[:500] if response.text else "No response body"
                     )
 
-                    # Log error to terminal
-                    print(f"✗ Mezmo API: Status {response.status_code} (attempt {attempt + 1}/{MAX_RETRIES})")
-
-                    logger.warning(
+                    log.warning(
                         "Mezmo API request failed",
                         status_code=response.status_code,
                         response_text=response_text,
                         attempt=attempt + 1,
                     )
 
-                    # Handle rate limiting (429) with longer backoff
+                    # Handle rate limiting (429) with Retry-After header
                     if response.status_code == 429:
+                        # Extract Retry-After header if present
+                        retry_after_header = response.headers.get("Retry-After")
+                        retry_after_seconds = None
+                        if retry_after_header:
+                            try:
+                                retry_after_seconds = int(retry_after_header)
+                            except ValueError:
+                                retry_after_seconds = None
+
                         last_exception = MezmoAPIError(
                             f"{error_msg}: {response_text}",
                             status_code=response.status_code,
                             response_text=response_text,
+                            retry_after=retry_after_seconds,
                         )
-                        # Use longer delay for rate limiting
+
+                        # Use Retry-After if provided, otherwise use exponential backoff
                         if attempt < MAX_RETRIES - 1:
-                            rate_limit_delay = RETRY_DELAY * (
-                                3**attempt
-                            ) + random.uniform(1, 5)
-                            print(f"  ⏳ Rate limited, waiting {round(rate_limit_delay, 1)}s...")
-                            logger.info(
-                                "Rate limited, using extended backoff",
-                                delay_seconds=rate_limit_delay,
+                            if retry_after_seconds is not None:
+                                rate_limit_delay = retry_after_seconds + random.uniform(0.5, 2.0)
+                            else:
+                                # Capped exponential backoff: 2^attempt instead of 3^attempt
+                                rate_limit_delay = min(
+                                    RETRY_DELAY * (2 ** attempt) + random.uniform(1, 3),
+                                    MAX_RETRY_DELAY
+                                )
+
+                            log.info(
+                                "Rate limited, waiting before retry",
+                                delay_seconds=round(rate_limit_delay, 1),
+                                retry_after_header=retry_after_header,
                                 attempt=attempt + 1,
                             )
                             await asyncio.sleep(rate_limit_delay)
@@ -278,9 +418,7 @@ async def fetch_latest_logs(
 
         except httpx.TimeoutException as e:
             error_msg = f"Request to Mezmo API timed out after {REQUEST_TIMEOUT}s"
-            print(f"✗ Mezmo API: Timeout after {REQUEST_TIMEOUT}s (attempt {attempt + 1}/{MAX_RETRIES})")
-            
-            logger.warning(
+            log.warning(
                 "Mezmo API request timeout",
                 timeout_seconds=REQUEST_TIMEOUT,
                 attempt=attempt + 1,
@@ -290,18 +428,20 @@ async def fetch_latest_logs(
 
         except httpx.ConnectError as e:
             error_msg = f"Failed to connect to Mezmo API: {e}"
-            print(f"✗ Mezmo API: Connection error (attempt {attempt + 1}/{MAX_RETRIES})")
-            
-            logger.warning(
-                "Mezmo API connection error", attempt=attempt + 1, error=str(e)
+            log.warning(
+                "Mezmo API connection error",
+                attempt=attempt + 1,
+                error=str(e),
             )
             last_exception = MezmoAPIError(error_msg)
 
+        except MezmoAPIError:
+            # Re-raise MezmoAPIError without wrapping
+            raise
+
         except Exception as e:
             error_msg = f"Unexpected error calling Mezmo API: {e}"
-            print(f"✗ Mezmo API: {type(e).__name__} - {str(e)[:100]} (attempt {attempt + 1}/{MAX_RETRIES})")
-            
-            logger.error(
+            log.error(
                 "Unexpected error in Mezmo API call",
                 attempt=attempt + 1,
                 error=str(e),
@@ -313,19 +453,19 @@ async def fetch_latest_logs(
         if attempt < MAX_RETRIES - 1 and (
             not last_exception or last_exception.status_code != 429
         ):
-            delay = RETRY_DELAY * (2**attempt) + random.uniform(0.1, 0.5)
-            logger.info(
+            delay = min(RETRY_DELAY * (2 ** attempt) + random.uniform(0.1, 0.5), MAX_RETRY_DELAY)
+            log.info(
                 "Retrying Mezmo API request",
                 attempt=attempt + 1,
                 max_retries=MAX_RETRIES,
-                delay_seconds=delay,
+                delay_seconds=round(delay, 1),
             )
             await asyncio.sleep(delay)
 
-    # All retries exhausted
-    print(f"✗ Mezmo API: All {MAX_RETRIES} retry attempts failed")
-    
-    logger.error(
+    # All retries exhausted - record failure for circuit breaker
+    await _circuit_breaker.record_failure()
+
+    log.error(
         "All Mezmo API retry attempts failed",
         max_retries=MAX_RETRIES,
         last_error=str(last_exception),
@@ -349,7 +489,8 @@ async def test_mezmo_connection() -> Dict[str, Any]:
 
         # Try to fetch a small number of logs to test the connection
         # The function now provides default timestamps automatically
-        logs = await fetch_latest_logs(count=1)
+        result_data = await fetch_latest_logs(count=1)
+        logs = result_data.get("logs", [])
 
         result = {
             "status": "success",
@@ -369,6 +510,11 @@ async def test_mezmo_connection() -> Dict[str, Any]:
 
         logger.error("Mezmo API connectivity test failed", result=result)
         return result
+
+
+def get_circuit_breaker_state() -> Dict[str, Any]:
+    """Get current circuit breaker state for monitoring."""
+    return _circuit_breaker.get_state()
 
 
 # Cleanup function for graceful shutdown

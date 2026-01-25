@@ -7,18 +7,19 @@ with comprehensive error handling, authentication, health checks, and observabil
 """
 
 import os
+import re
 import time
-from typing import List, Dict, Any, Optional
-from contextlib import asynccontextmanager
+import uuid
+from typing import Dict, Any, Optional
 
 import structlog
 from fastmcp import FastMCP, Context
 from fastmcp.exceptions import ToolError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from prometheus_client import Counter, Histogram, Gauge, start_http_server
 from dotenv import load_dotenv
 
-from mezmo_api import fetch_latest_logs
+from mezmo_api import fetch_latest_logs, MezmoAPIError, get_circuit_breaker_state
 
 # Load environment variables
 load_dotenv()
@@ -83,6 +84,13 @@ if ENABLE_METRICS:
     )
 
 
+# Valid log levels per Mezmo API
+VALID_LOG_LEVELS = {"DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "ALERT", "EMERGENCY"}
+
+# Pattern for valid identifiers (app names, host names)
+IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-]+$")
+
+
 # Pydantic models for request validation
 class LogsRequest(BaseModel):
     """Request model for get_logs tool with validation"""
@@ -111,6 +119,69 @@ class LogsRequest(BaseModel):
     )
     pagination_id: Optional[str] = Field(default=None, description="Pagination token")
 
+    @field_validator("apps", "hosts")
+    @classmethod
+    def validate_comma_separated_identifiers(cls, v: Optional[str]) -> Optional[str]:
+        """Validate comma-separated identifier lists (apps, hosts)."""
+        if v is None:
+            return v
+
+        items = [item.strip() for item in v.split(",") if item.strip()]
+        if not items:
+            raise ValueError("Cannot be empty after parsing")
+
+        invalid_items = []
+        for item in items:
+            if not IDENTIFIER_PATTERN.match(item):
+                invalid_items.append(item)
+
+        if invalid_items:
+            raise ValueError(
+                f"Invalid identifier(s): {invalid_items}. "
+                "Identifiers must contain only alphanumeric characters, underscores, dots, and hyphens."
+            )
+
+        return ",".join(items)  # Return normalized version
+
+    @field_validator("levels")
+    @classmethod
+    def validate_levels(cls, v: Optional[str]) -> Optional[str]:
+        """Validate comma-separated log levels."""
+        if v is None:
+            return v
+
+        items = [item.strip().upper() for item in v.split(",") if item.strip()]
+        if not items:
+            raise ValueError("Cannot be empty after parsing")
+
+        invalid_levels = set(items) - VALID_LOG_LEVELS
+        if invalid_levels:
+            raise ValueError(
+                f"Invalid log level(s): {invalid_levels}. "
+                f"Valid levels: {sorted(VALID_LOG_LEVELS)}"
+            )
+
+        return ",".join(items)  # Return normalized (uppercase) version
+
+    @field_validator("from_ts", "to_ts")
+    @classmethod
+    def validate_timestamp(cls, v: Optional[str]) -> Optional[str]:
+        """Validate UNIX timestamps."""
+        if v is None:
+            return v
+
+        try:
+            ts = int(v)
+            if ts < 0:
+                raise ValueError("Timestamp must be positive")
+            # Sanity check: reject timestamps obviously in the future (> 10 years from now)
+            if ts > time.time() + 315360000:  # 10 years in seconds
+                raise ValueError("Timestamp appears to be too far in the future")
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid timestamp: {v}. Must be a UNIX timestamp in seconds. {e}")
+
+        return v
+
 
 class HealthResponse(BaseModel):
     """Health check response model"""
@@ -121,32 +192,61 @@ class HealthResponse(BaseModel):
     dependencies: Dict[str, str] = {}
 
 
-# Application lifespan management
-@asynccontextmanager
-async def lifespan(app):
-    """Manage application startup and shutdown"""
-    logger.info(
-        "Starting Mezmo MCP Server",
-        server_name=SERVER_NAME,
-        host=SERVER_HOST,
-        port=SERVER_PORT,
-    )
-
-    # Start metrics server if enabled
-    if ENABLE_METRICS:
-        try:
-            start_http_server(METRICS_PORT)
-            logger.info("Metrics server started", port=METRICS_PORT)
-        except Exception as e:
-            logger.error("Failed to start metrics server", error=str(e))
-
-    yield
-
-    logger.info("Shutting down Mezmo MCP Server")
-
-
 # Create FastMCP server
 mcp = FastMCP(name=SERVER_NAME)
+
+
+def _build_error_message(error: MezmoAPIError, request_data: "LogsRequest") -> str:
+    """Build a helpful error message based on the error type and context."""
+    if error.status_code == 429:
+        # Rate limit error
+        retry_info = ""
+        if error.retry_after:
+            retry_info = f"The API suggests waiting {error.retry_after} seconds before retrying.\n"
+        else:
+            retry_info = "Wait 30-60 seconds before trying again.\n"
+
+        return (
+            f"Mezmo API Rate Limited: {error.message}\n\n"
+            f"{retry_info}"
+            "Suggestions to reduce API load:\n"
+            f"1. You requested count={request_data.count}. Try reducing to count=3 or count=5.\n"
+            "2. Add an app filter (apps='your-app') to drastically reduce volume.\n"
+            "3. Add a levels filter (levels='ERROR,WARNING') to focus on important logs.\n"
+            "4. Avoid making multiple concurrent requests."
+        )
+
+    elif error.status_code == 503:
+        # Circuit breaker open
+        cb_state = get_circuit_breaker_state()
+        return (
+            f"Mezmo API Unavailable: {error.message}\n\n"
+            f"The service has experienced {cb_state['failure_count']} recent failures.\n"
+            f"Automatic recovery will be attempted in {cb_state['recovery_timeout']} seconds.\n"
+            "This is a temporary protection mechanism to prevent cascading failures."
+        )
+
+    elif error.status_code == 401:
+        return (
+            f"Authentication Failed: {error.message}\n\n"
+            "The Mezmo API key may be invalid or expired.\n"
+            "Please verify the MEZMO_API_KEY environment variable is set correctly."
+        )
+
+    elif error.status_code == 400:
+        return (
+            f"Invalid Request: {error.message}\n\n"
+            "The request parameters may be malformed. Check:\n"
+            f"- apps: {request_data.apps}\n"
+            f"- hosts: {request_data.hosts}\n"
+            f"- levels: {request_data.levels}\n"
+            f"- query: {request_data.query}\n"
+            f"- from_ts: {request_data.from_ts}\n"
+            f"- to_ts: {request_data.to_ts}"
+        )
+
+    else:
+        return f"Failed to retrieve logs from Mezmo: {error.message}"
 
 
 # Initialize startup tasks
@@ -178,7 +278,7 @@ async def get_logs(
     to_ts: Optional[str] = None,
     prefer: str = "tail",
     pagination_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Retrieve logs from Mezmo Export API v2 with comprehensive filtering.
 
@@ -243,17 +343,6 @@ async def get_logs(
             REQUEST_COUNT.labels(tool_name="get_logs", status="validation_error").inc()
         raise ToolError(str(e))
 
-    # Log the request to terminal
-    filters = []
-    if request_data.apps:
-        filters.append(f"apps={request_data.apps}")
-    if request_data.levels:
-        filters.append(f"levels={request_data.levels}")
-    if request_data.query:
-        filters.append(f"query={request_data.query}")
-    filter_str = f" [{', '.join(filters)}]" if filters else ""
-    print(f"→ get_logs: count={request_data.count}{filter_str}")
-
     # Log the request with context
     logger.info(
         "Processing get_logs request",
@@ -270,12 +359,15 @@ async def get_logs(
     if ENABLE_METRICS:
         REQUEST_COUNT.labels(tool_name="get_logs", status="started").inc()
 
+    # Generate correlation ID for request tracing
+    correlation_id = str(uuid.uuid4())
+
     try:
         # Log progress to client
         await ctx.info(f"Fetching {request_data.count} logs from Mezmo API...")
 
         # Call the Mezmo API
-        logs = await fetch_latest_logs(
+        result = await fetch_latest_logs(
             count=request_data.count,
             apps=request_data.apps,
             hosts=request_data.hosts,
@@ -285,13 +377,17 @@ async def get_logs(
             to_ts=request_data.to_ts,
             prefer=request_data.prefer,
             pagination_id=request_data.pagination_id,
+            correlation_id=correlation_id,
         )
+
+        logs = result.get("logs", [])
 
         # Log success
         logger.info(
             "Successfully retrieved logs from Mezmo",
             logs_count=len(logs),
             request_count=request_data.count,
+            correlation_id=correlation_id,
         )
 
         # Update metrics
@@ -302,52 +398,106 @@ async def get_logs(
                 time.time() - start_time
             )
 
-        # Notify client of completion
-        await ctx.info(f"Successfully retrieved {len(logs)} logs")
+        # Provide guidance for empty results
+        if len(logs) == 0:
+            await ctx.info(
+                "No logs found. Suggestions:\n"
+                "1. Expand time range (from_ts further back)\n"
+                "2. Remove filters to discover available apps\n"
+                "3. Check app names with list_apps tool"
+            )
+        else:
+            # Notify client of completion
+            await ctx.info(f"Successfully retrieved {len(logs)} logs")
 
-        return logs
+        # Build time range for metadata
+        now = int(time.time())
+        from_ts_value = request_data.from_ts or str(now - 21600)
+        to_ts_value = request_data.to_ts or str(now)
 
-    except Exception as e:
-        # Log errors to terminal
-        error_type = type(e).__name__
-        is_rate_limit = (
-            "429" in str(e)
-            or "rate limit" in str(e).lower()
-            or "concurrent" in str(e).lower()
-        )
+        # Return structured response with metadata
+        return {
+            "logs": logs,
+            "metadata": {
+                "count": len(logs),
+                "requested_count": request_data.count,
+                "pagination_id": result.get("pagination_id"),
+                "has_more": result.get("has_more", False),
+                "time_range": {
+                    "from": from_ts_value,
+                    "to": to_ts_value,
+                },
+                "filters": {
+                    "apps": request_data.apps,
+                    "hosts": request_data.hosts,
+                    "levels": request_data.levels,
+                    "query": request_data.query,
+                },
+                "correlation_id": correlation_id,
+            },
+        }
+
+    except MezmoAPIError as e:
+        # Handle Mezmo API specific errors
+        error_type = "MezmoAPIError"
+        is_rate_limit = e.status_code == 429
+        is_circuit_breaker = e.status_code == 503
 
         # Log error
         logger.error(
             "Failed to retrieve logs from Mezmo",
             error=str(e),
             error_type=error_type,
+            status_code=e.status_code,
             count=request_data.count,
             apps=request_data.apps,
             is_rate_limit=is_rate_limit,
+            retry_after=e.retry_after,
         )
 
-        # Update error metrics (with specific label for rate limiting)
+        # Update error metrics
         if ENABLE_METRICS:
-            status = "rate_limited" if is_rate_limit else "error"
+            if is_rate_limit:
+                status = "rate_limited"
+            elif is_circuit_breaker:
+                status = "circuit_breaker_open"
+            else:
+                status = "error"
             REQUEST_COUNT.labels(tool_name="get_logs", status=status).inc()
             REQUEST_LATENCY.labels(tool_name="get_logs").observe(
                 time.time() - start_time
             )
 
-        # Provide helpful error message to agent
-        if is_rate_limit:
-            error_msg = (
-                f"Mezmo API Rate Limited: {str(e)}\n\n"
-                "The Mezmo API has rejected the request due to rate limiting. "
-                "Suggestions:\n"
-                "1. Wait 30-60 seconds before trying again\n"
-                "2. Reduce count (try count=3 or count=5)\n"
-                "3. Filter by app (apps='app-a') to drastically reduce volume\n"
-                "4. Filter by levels (levels='ERROR' or levels='WARNING')\n"
-                "5. Avoid making multiple concurrent requests"
+        # Provide helpful error message based on error type
+        error_msg = _build_error_message(e, request_data)
+
+        # Notify client of error
+        await ctx.error(error_msg)
+
+        # Always raise ToolError so the agent knows the tool failed
+        raise ToolError(error_msg)
+
+    except Exception as e:
+        # Handle unexpected errors
+        error_type = type(e).__name__
+
+        # Log error
+        logger.error(
+            "Unexpected error retrieving logs from Mezmo",
+            error=str(e),
+            error_type=error_type,
+            count=request_data.count,
+            apps=request_data.apps,
+        )
+
+        # Update error metrics
+        if ENABLE_METRICS:
+            REQUEST_COUNT.labels(tool_name="get_logs", status="error").inc()
+            REQUEST_LATENCY.labels(tool_name="get_logs").observe(
+                time.time() - start_time
             )
-        else:
-            error_msg = f"Failed to retrieve logs from Mezmo: {str(e)}"
+
+        error_msg = f"Failed to retrieve logs from Mezmo: {str(e)}"
 
         # Notify client of error
         await ctx.error(error_msg)
@@ -386,6 +536,198 @@ async def health_check() -> str:
             dependencies={"error": str(e)},
         )
         return error_response.model_dump_json()
+
+
+@mcp.tool
+async def list_apps(
+    ctx: Context,
+    hours: int = 6,
+) -> Dict[str, Any]:
+    """
+    Discover available application names in recent logs.
+
+    Use this tool before get_logs to find valid app names for filtering.
+    Samples recent logs to extract unique application names.
+
+    Args:
+        hours: How many hours back to search (default: 6)
+
+    Returns:
+        Dictionary with 'apps' list and 'count'
+
+    Example:
+        list_apps() -> {"apps": ["web-api", "worker", "scheduler"], "count": 3}
+    """
+    correlation_id = str(uuid.uuid4())
+
+    # Record metrics
+    start_time = time.time()
+    if ENABLE_METRICS:
+        REQUEST_COUNT.labels(tool_name="list_apps", status="started").inc()
+
+    try:
+        await ctx.info("Discovering available applications...")
+
+        # Calculate time range
+        now = int(time.time())
+        from_ts = str(now - (hours * 3600))
+
+        # Fetch a sample of logs to discover apps
+        result = await fetch_latest_logs(
+            count=100,
+            from_ts=from_ts,
+            to_ts=str(now),
+            correlation_id=correlation_id,
+        )
+
+        logs = result.get("logs", [])
+
+        # Extract unique app names
+        apps = set()
+        for log in logs:
+            app = log.get("_app")
+            if app:
+                apps.add(app)
+
+        # Update metrics
+        if ENABLE_METRICS:
+            REQUEST_COUNT.labels(tool_name="list_apps", status="success").inc()
+            REQUEST_LATENCY.labels(tool_name="list_apps").observe(
+                time.time() - start_time
+            )
+
+        sorted_apps = sorted(apps)
+        await ctx.info(f"Found {len(sorted_apps)} unique applications")
+
+        return {
+            "apps": sorted_apps,
+            "count": len(sorted_apps),
+            "sample_size": len(logs),
+            "hours_searched": hours,
+        }
+
+    except MezmoAPIError as e:
+        if ENABLE_METRICS:
+            REQUEST_COUNT.labels(tool_name="list_apps", status="error").inc()
+
+        error_msg = f"Failed to discover apps: {e.message}"
+        await ctx.error(error_msg)
+        raise ToolError(error_msg)
+
+    except Exception as e:
+        if ENABLE_METRICS:
+            REQUEST_COUNT.labels(tool_name="list_apps", status="error").inc()
+
+        error_msg = f"Failed to discover apps: {str(e)}"
+        await ctx.error(error_msg)
+        raise ToolError(error_msg)
+
+
+@mcp.tool
+async def get_log_stats(
+    ctx: Context,
+    hours: int = 6,
+    apps: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Get statistics about recent log activity.
+
+    Returns level distribution, top applications, and log volume.
+    Useful for understanding the shape of your logs before querying.
+
+    Args:
+        hours: How many hours back to analyze (default: 6)
+        apps: Optional app filter (comma-separated)
+
+    Returns:
+        Dictionary with level_distribution, top_apps, and total_sampled
+
+    Example:
+        get_log_stats() -> {
+            "level_distribution": {"INFO": 45, "ERROR": 12, "WARNING": 8},
+            "top_apps": [{"app": "web-api", "count": 30}, ...],
+            "total_sampled": 100
+        }
+    """
+    correlation_id = str(uuid.uuid4())
+
+    # Record metrics
+    start_time = time.time()
+    if ENABLE_METRICS:
+        REQUEST_COUNT.labels(tool_name="get_log_stats", status="started").inc()
+
+    try:
+        await ctx.info("Gathering log statistics...")
+
+        # Calculate time range
+        now = int(time.time())
+        from_ts = str(now - (hours * 3600))
+
+        # Fetch a sample of logs
+        result = await fetch_latest_logs(
+            count=200,
+            apps=apps,
+            from_ts=from_ts,
+            to_ts=str(now),
+            correlation_id=correlation_id,
+        )
+
+        logs = result.get("logs", [])
+
+        # Calculate level distribution
+        level_counts: Dict[str, int] = {}
+        app_counts: Dict[str, int] = {}
+
+        for log in logs:
+            # Count by level
+            level = log.get("_level", "UNKNOWN")
+            if isinstance(level, str):
+                level = level.upper()
+            level_counts[level] = level_counts.get(level, 0) + 1
+
+            # Count by app
+            app = log.get("_app", "unknown")
+            app_counts[app] = app_counts.get(app, 0) + 1
+
+        # Sort apps by count (descending)
+        top_apps = sorted(
+            [{"app": app, "count": count} for app, count in app_counts.items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:10]  # Top 10 apps
+
+        # Update metrics
+        if ENABLE_METRICS:
+            REQUEST_COUNT.labels(tool_name="get_log_stats", status="success").inc()
+            REQUEST_LATENCY.labels(tool_name="get_log_stats").observe(
+                time.time() - start_time
+            )
+
+        await ctx.info(f"Analyzed {len(logs)} logs across {len(app_counts)} apps")
+
+        return {
+            "level_distribution": level_counts,
+            "top_apps": top_apps,
+            "total_sampled": len(logs),
+            "hours_analyzed": hours,
+            "filters_applied": {"apps": apps} if apps else None,
+        }
+
+    except MezmoAPIError as e:
+        if ENABLE_METRICS:
+            REQUEST_COUNT.labels(tool_name="get_log_stats", status="error").inc()
+
+        error_msg = f"Failed to get log stats: {e.message}"
+        await ctx.error(error_msg)
+        raise ToolError(error_msg)
+
+    except Exception as e:
+        if ENABLE_METRICS:
+            REQUEST_COUNT.labels(tool_name="get_log_stats", status="error").inc()
+
+        error_msg = f"Failed to get log stats: {str(e)}"
+        await ctx.error(error_msg)
+        raise ToolError(error_msg)
 
 
 @mcp.prompt
