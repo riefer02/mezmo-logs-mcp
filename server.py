@@ -88,7 +88,8 @@ if ENABLE_METRICS:
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "ALERT", "EMERGENCY"}
 
 # Pattern for valid identifiers (app names, host names)
-IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-]+$")
+# Allows: alphanumeric, underscores, dots, hyphens, and brackets (for Heroku-style names like app[mcp])
+IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-\[\]]+$")
 
 
 # Pydantic models for request validation
@@ -138,7 +139,7 @@ class LogsRequest(BaseModel):
         if invalid_items:
             raise ValueError(
                 f"Invalid identifier(s): {invalid_items}. "
-                "Identifiers must contain only alphanumeric characters, underscores, dots, and hyphens."
+                "Identifiers must contain only alphanumeric characters, underscores, dots, hyphens, and brackets."
             )
 
         return ",".join(items)  # Return normalized version
