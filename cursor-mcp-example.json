@@ -3,7 +3,9 @@
     "mezmo": {
       "command": "uv",
       "args": ["run", "--directory", "/path/to/mezmo-mcp", "server.py"],
-      "description": "Mezmo log retrieval MCP server - provides access to Mezmo logs and analysis"
+      "env": {
+        "MEZMO_API_KEY": "your-mezmo-api-key"
+      }
     }
   }
 }

@@ -81,13 +81,18 @@ For Cursor, add to `.cursor/mcp.json`:
   "mcpServers": {
     "mezmo": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/mezmo-mcp", "server.py"]
+      "args": ["run", "--directory", "/path/to/mezmo-mcp", "server.py"],
+      "env": {
+        "MEZMO_API_KEY": "your-mezmo-api-key"
+      }
     }
   }
 }
 ```
 
 No Docker or port management needed — Cursor spawns the server directly.
+
+**Environment variables:** Set `MEZMO_API_KEY` in the `env` block above. If omitted, the server falls back to the `.env` file in the project directory (see `.env.example`).
 
 ### Alternative: HTTP transport (Docker)
 
