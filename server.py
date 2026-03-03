@@ -6,8 +6,11 @@ This server provides a robust, scalable MCP implementation for Mezmo log retriev
 with comprehensive error handling, authentication, health checks, and observability.
 """
 
+import argparse
+import logging
 import os
 import re
+import sys
 import time
 import uuid
 from typing import Dict, Any, Optional
@@ -829,11 +832,41 @@ def create_app():
 
 def main():
     """Main entry point"""
-    # Initialize server components
-    initialize_server()
+    parser = argparse.ArgumentParser(description="Mezmo MCP Server")
+    parser.add_argument(
+        "--transport",
+        default=os.getenv("MCP_TRANSPORT", "stdio"),
+        choices=["stdio", "http"],
+        help="Transport mode (default: stdio, or MCP_TRANSPORT env)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.getenv("MCP_SERVER_HOST", "0.0.0.0"),
+        help="HTTP host (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("MCP_SERVER_PORT", "18080")),
+        help="HTTP port (default: 18080)",
+    )
+    parser.add_argument(
+        "--log-level",
+        default=os.getenv("MCP_LOG_LEVEL", "INFO"),
+        help="Log level (default: INFO)",
+    )
+    args = parser.parse_args()
 
-    # Run the server with HTTP transport
-    mcp.run(transport="http", host="0.0.0.0", port=18080, path="/mcp")
+    # Send structlog output to stderr so it doesn't interfere with stdio transport
+    logging.basicConfig(stream=sys.stderr, level=getattr(logging, args.log_level.upper(), logging.INFO))
+
+    if args.transport == "stdio":
+        # stdio mode: no metrics server, MCP client spawns us directly
+        mcp.run(transport="stdio")
+    else:
+        # HTTP mode: full init with metrics
+        initialize_server()
+        mcp.run(transport="http", host=args.host, port=args.port, path="/mcp")
 
 
 if __name__ == "__main__":

@@ -73,7 +73,29 @@ Default behavior for `get_logs` (quota-conscious):
 
 ## MCP Client Configuration
 
+### Primary: uv stdio (recommended)
+
 For Cursor, add to `.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "mezmo": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/mezmo-mcp", "server.py"]
+    }
+  }
+}
+```
+
+No Docker or port management needed — Cursor spawns the server directly.
+
+### Alternative: HTTP transport (Docker)
+
+```bash
+docker-compose up -d
+```
+
+Then in `.cursor/mcp.json`:
 ```json
 {
   "mcpServers": {
